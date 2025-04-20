@@ -122,5 +122,6 @@ dmypy.json
 .env
 .env.local
 
-
-*.csv # ignoring csv files since data is to big
+# ignoring csv files since data is to big
+*.csv 
+*.db
