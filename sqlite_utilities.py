@@ -74,3 +74,39 @@ def df_to_sqlite(df, db_name, table_name, if_exists='replace', index=False):
     except Exception as e:
         print(f"Error saving DataFrame to SQLite: {e}")
         return False
+    
+def query_to_df(db_name, query):
+    """
+    Run a SQL query on the SQLite database and return the result as a DataFrame.
+    
+    Parameters:
+    -----------
+    db_name : str
+        Name of the SQLite database file
+    query : str
+        SQL query to execute
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        Result of the query as a DataFrame
+        
+    Example:
+    --------
+    df = run_query('my_database.db', 'SELECT * FROM my_table')
+    """
+    try:
+        # Create a database connection
+        conn = sqlite3.connect(db_name)
+        
+        # Execute the query and return the result as a DataFrame
+        df = pd.read_sql_query(query, conn)
+        
+        # Close the connection
+        conn.close()
+        
+        return df
+    
+    except Exception as e:
+        print(f"Error running query: {e}")
+        return None
