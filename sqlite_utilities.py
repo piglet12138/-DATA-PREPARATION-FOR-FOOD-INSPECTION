@@ -2,7 +2,7 @@ import pandas as pd
 import sqlite3
 from datetime import datetime
 
-def df_to_sqlite(df, db_name, table_name, if_exists='replace', index=False):
+def df_to_sqlite(df, db_name, table_name, if_exists='replace', index=False, add_timestamp=True):
     """
     Save a pandas DataFrame to a SQLite database table with customization options.
     
@@ -41,27 +41,27 @@ def df_to_sqlite(df, db_name, table_name, if_exists='replace', index=False):
         df.to_sql(table_name, conn, if_exists=if_exists, index=index)
         
         # Add timestamp metadata if requested
-        # if add_timestamp:
-        #     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        #     cursor = conn.cursor()
+        if add_timestamp:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor = conn.cursor()
             
-        #     # Create metadata table if it doesn't exist
-        #     cursor.execute("""
-        #     CREATE TABLE IF NOT EXISTS metadata (
-        #         table_name TEXT,
-        #         created_at TEXT,
-        #         rows INTEGER,
-        #         columns INTEGER
-        #     )
-        #     """)
+            # Create metadata table if it doesn't exist
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                table_name TEXT,
+                created_at TEXT,
+                rows INTEGER,
+                columns INTEGER
+            )
+            """)
             
-        #     # Add or update metadata for this table
-        #     cursor.execute("""
-        #     INSERT OR REPLACE INTO metadata (table_name, created_at, rows, columns)
-        #     VALUES (?, ?, ?, ?)
-        #     """, (table_name, timestamp, len(df), len(df.columns)))
+            # Add or update metadata for this table
+            cursor.execute("""
+            INSERT OR REPLACE INTO metadata (table_name, created_at, rows, columns)
+            VALUES (?, ?, ?, ?)
+            """, (table_name, timestamp, len(df), len(df.columns)))
             
-        #     conn.commit()
+            conn.commit()
         
         # Close the connection
         conn.close()
