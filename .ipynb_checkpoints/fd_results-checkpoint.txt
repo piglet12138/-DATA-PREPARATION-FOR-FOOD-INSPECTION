@@ -1,0 +1,11 @@
+
+Execution Time: 150.21 seconds
+63 FDs found:
+
+Inspection ID → License #
+Inspection ID → DBA Name
+Inspection ID → Facility Type
+Inspection ID → Risk
+Inspection ID → City
+Inspection ID → State
+Inspection ID → Results
