@@ -4,6 +4,9 @@ import requests
 import pandas as pd
 import numpy as np
 from fuzzywuzzy import fuzz, process
+import sqlite3
+from datetime import datetime
+
 """
 try to normalize data cleaning and evaluate data quility
 1. imputation of missing values
@@ -465,6 +468,138 @@ def parse_violations(df):
     
     return result_df
 
+def create_normalized_tables(df):
+    """
+    Split the food inspection dataframe into two normalized tables:
+    1. facility - containing facility information
+    2. inspection - containing inspection information
+    
+    Returns:
+    tuple: (facility_df, inspection_df)
+    """
+    # Create the facility table with unique facility information
+    # Use License # as the primary key
+    facility_df = df[['License #', 'DBA Name', 'AKA Name', 'Facility Type', 
+                      'Risk', 'Address', 'City', 'State', 'Zip', 
+                      'Latitude', 'Longitude', 'Location']].drop_duplicates(subset=['License #'])
+    
+    # Create inspection table with inspection information and foreign key to facility table
+    inspection_df = df[['Inspection ID', 'License #', 'Inspection Date', 
+                        'Inspection Type', 'Results', 'Violations']]
+    
+    return facility_df, inspection_df
+
+
+def df_to_sqlite(df, db_name, table_name, if_exists='replace', index=False, add_timestamp=True):
+    """
+    Save a pandas DataFrame to a SQLite database table with customization options.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        The DataFrame to save to SQLite
+    db_name : str
+        Name of the SQLite database file (will be created if it doesn't exist)
+    table_name : str
+        Name of the table to create/update in the database
+    if_exists : str, optional (default='replace')
+        How to behave if the table already exists:
+        - 'fail': Raise a ValueError
+        - 'replace': Drop the table before inserting new values
+        - 'append': Insert new values to the existing table
+    index : bool, optional (default=False)
+        Whether to include the DataFrame's index as a column
+    add_timestamp : bool, optional (default=True)
+        Whether to add a metadata table with creation timestamp
+        
+    Returns:
+    --------
+    bool
+        True if successful
+        
+    Example:
+    --------
+    df_to_sqlite(my_dataframe, 'my_database.db', 'my_table', if_exists='append')
+    """
+    try:
+        # Create a database connection
+        conn = sqlite3.connect(db_name)
+        
+        # Save the DataFrame to SQLite
+        df.to_sql(table_name, conn, if_exists=if_exists, index=index)
+        
+        # Add timestamp metadata if requested
+        if add_timestamp:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor = conn.cursor()
+            
+            # Create metadata table if it doesn't exist
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                table_name TEXT,
+                created_at TEXT,
+                rows INTEGER,
+                columns INTEGER
+            )
+            """)
+            
+            # Add or update metadata for this table
+            cursor.execute("""
+            INSERT OR REPLACE INTO metadata (table_name, created_at, rows, columns)
+            VALUES (?, ?, ?, ?)
+            """, (table_name, timestamp, len(df), len(df.columns)))
+            
+            conn.commit()
+        
+        # Close the connection
+        conn.close()
+        
+        print(f"Successfully saved DataFrame to {db_name} as table '{table_name}'")
+        print(f"Table contains {len(df)} rows and {len(df.columns)} columns")
+        
+        return True
+    
+    except Exception as e:
+        print(f"Error saving DataFrame to SQLite: {e}")
+        return False
+    
+def query_to_df(db_name, query):
+    """
+    Run a SQL query on the SQLite database and return the result as a DataFrame.
+    
+    Parameters:
+    -----------
+    db_name : str
+        Name of the SQLite database file
+    query : str
+        SQL query to execute
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        Result of the query as a DataFrame
+        
+    Example:
+    --------
+    df = run_query('my_database.db', 'SELECT * FROM my_table')
+    """
+    try:
+        # Create a database connection
+        conn = sqlite3.connect(db_name)
+        
+        # Execute the query and return the result as a DataFrame
+        df = pd.read_sql_query(query, conn)
+        
+        # Close the connection
+        conn.close()
+        
+        return df
+    
+    except Exception as e:
+        print(f"Error running query: {e}")
+        return None
+
+
 food_dataset = pd.read_csv("Food_Inspections_20250216.csv")
 updated_food_dataset = food_dataset.copy()
 # Apply function
@@ -485,4 +620,5 @@ updated_food_dataset = fix_city_name(updated_food_dataset)
 updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
 
-normalized_violations = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
+violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
+facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
