@@ -453,7 +453,7 @@ def parse_violations(df):
         # 'dba_name': df['dba_name'].repeat(parsed_rows.apply(len)),
         # 'inspection_date': df['inspection_date'].repeat(parsed_rows.apply(len)),
         # 'inspection_type': df['inspection_type'].repeat(parsed_rows.apply(len)),
-        # 'Results': df['Results'].repeat(parsed_rows.apply(len))
+        # 'results': df['results'].repeat(parsed_rows.apply(len))
     })
     
     # Extract the parsed data into separate columns
@@ -485,7 +485,7 @@ def create_normalized_tables(df):
     
     # Create inspection table with inspection information and foreign key to facility table
     inspection_df = df[['inspection_id', 'license_num', 'inspection_date', 
-                        'inspection_type', 'Results', 'violations']]
+                        'inspection_type', 'results', 'violations']]
     
     return facility_df, inspection_df
 
@@ -600,7 +600,7 @@ def query_to_df(db_name, query):
         return None
 
 if __name__ == '__main__':
-    food_dataset = pd.read_csv("Food_Inspections_20250216.csv")
+    food_dataset = pd.read_csv("Food_Inspections_20250216.csv",  dtype={'License #': str, 'Zip': str})
     updated_food_dataset = food_dataset.copy()
     # Apply function
     updated_food_dataset = col_name_changer(updated_food_dataset)
@@ -622,3 +622,8 @@ if __name__ == '__main__':
 
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
     facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
+    
+    # Save tables to SQLite database
+    df_to_sqlite(violations_df, 'food_inspections.db', 'violations', if_exists='replace', index=False)
+    df_to_sqlite(facility_df, 'food_inspections.db', 'facility', if_exists='replace', index=False)
+    df_to_sqlite(inspection_df, 'food_inspections.db', 'inspection', if_exists='replace', index=False)
