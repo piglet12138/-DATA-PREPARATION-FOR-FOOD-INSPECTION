@@ -7,3 +7,5 @@ zipcodes
 missingno
 matplotlib
 seaborn
+mlxtend
+tqdm

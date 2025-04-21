@@ -13,6 +13,20 @@ import seaborn as sns
 from collections import Counter, defaultdict
 from string import capwords
 
+
+import networkx as nx
+import time
+from collections import defaultdict
+from itertools import combinations
+import sys
+from tqdm import tqdm
+from tane import TANE, PPattern, read_db, tostr
+from mlxtend.frequent_patterns import apriori, association_rules
+tane_imported = True
+
+
+
+
 ##### DATA PROFILING #####
 
 def profile_name(df, dba_col='dba_name', aka_col='aka_name', 
@@ -625,8 +639,494 @@ def verify_violations_structure(df, structure=r"^\s*\d+\.\s+.+?(\s+-\s+Comments:
 
 
 
+def profile_violations_normalized(violations_df):
+    '''
+    Function to profile the violations data after it has been normalized.
+    '''
+    # Get counts of each code_category and sort
+    violations_df['code_category'] = violations_df['violation_code'].astype('str') + '-' + violations_df['category'].str[:40]
+    code_category_counts = violations_df['code_category'].value_counts().reset_index()
+    code_category_counts.columns = ['code_category', 'count']
+    code_category_counts = code_category_counts.head(20)  # Top 20
+
+    # Create figure with larger size for readability
+    plt.figure(figsize=(14, 10))
+
+    # Create horizontal bar chart
+    sns.barplot(x='count', y='code_category', data=code_category_counts, palette='viridis')
+
+    # Add title and labels
+    plt.title('Top 20 Most Common Violation Code-Categories', fontsize=16)
+    plt.xlabel('Count', fontsize=12)
+    plt.ylabel('Violation Code-Category', fontsize=12)
+    plt.tight_layout()
+
+    # Add count values at the end of each bar
+    for i, v in enumerate(code_category_counts['count']):
+        plt.text(v + 0.1, i, f"{v:,}", va='center')
+
+    plt.show()
 
 
+
+def extract_violation_codes(text):
+    if pd.isna(text):
+        return []
+    # extract violation code(e.g. 32, 10, 47 )
+    codes = re.findall(r"\b(\d+)\.(?=\s+[A-Z])", text)
+    return codes
+
+
+def preprocess_data(df, violation_col=None, max_categories=20):
+    """
+    Preprocess the data for association rule mining
+
+    Parameters:
+    -----------
+    df : pandas DataFrame
+        The input dataset
+    violation_col : string, optional
+        The column name containing violation text data
+    max_categories : int, optional
+        Maximum number of categories to keep for each categorical column
+
+    Returns:
+    --------
+    trans_df : pandas DataFrame
+        Transformed dataset ready for association rule mining
+    """
+    transactions = []
+
+    # 限制每个分类列的唯一值数量
+    category_maps = {}
+    for col in df.columns:
+        if col != violation_col and pd.api.types.is_object_dtype(df[col]):
+            # 获取前N个最常见的分类
+            value_counts = df[col].value_counts()
+            top_categories = value_counts.index[:max_categories].tolist()
+            # 创建映射
+            category_maps[col] = {cat: f"{col}_{cat}" for cat in top_categories}
+
+    for idx, row in df.iterrows():
+        transaction = {}
+
+        # 添加分类列
+        for col in df.columns:
+            if col != violation_col and pd.api.types.is_object_dtype(df[col]):
+                val = row[col]
+                if val in category_maps[col]:
+                    transaction[category_maps[col][val]] = 1
+
+        # 添加违规代码
+        if violation_col is not None and not pd.isna(row[violation_col]):
+            violation_codes = extract_violation_codes(row[violation_col])
+            for code in violation_codes:
+                transaction[f'Violation_{code}'] = 1
+
+        transactions.append(transaction)
+
+    # 从交易创建DataFrame
+    trans_df = pd.DataFrame(transactions)
+
+    # 用0填充缺失值
+    trans_df = trans_df.fillna(0).astype(int)
+
+    return trans_df
+
+
+def mine_association_rules(df, columns_to_analyze, min_support=0.01,
+                           min_threshold=1.0, metric="lift", max_results=10):
+    """
+    Mine association rules from the specified columns
+
+    Parameters:
+    -----------
+    df : pandas DataFrame
+        The preprocessed dataset
+    columns_to_analyze : list
+        List of column prefixes to include in the analysis
+    min_support : float, optional
+        Minimum support for apriori algorithm
+    min_threshold : float, optional
+        Minimum threshold for the specified metric
+    metric : string, optional
+        Metric to use for association rules
+    max_results : int, optional
+        Maximum number of results to return
+
+    Returns:
+    --------
+    tuple : (frequent_itemsets, rules, formatted_rules)
+        frequent_itemsets: DataFrame with frequent itemsets
+        rules: DataFrame with association rules
+        formatted_rules: list of formatted rule strings
+    """
+    # Select columns to analyze
+    selected_cols = []
+    for prefix in columns_to_analyze:
+        selected_cols.extend([col for col in df.columns if col.startswith(prefix)])
+
+    if not selected_cols:
+        return None, None, ["No columns matching the specified prefixes were found."]
+
+    selected_df = df[selected_cols]
+
+    # Apply Apriori algorithm
+    frequent_itemsets = apriori(selected_df, min_support=min_support, use_colnames=True)
+
+    if len(frequent_itemsets) == 0:
+        return frequent_itemsets, None, ["No frequent itemsets found with the given minimum support."]
+
+    # Sort frequent itemsets by support
+    frequent_itemsets = frequent_itemsets.sort_values('support', ascending=False)
+
+    # Generate association rules
+    rules = association_rules(frequent_itemsets, metric=metric, min_threshold=min_threshold)
+
+    if len(rules) == 0:
+        return frequent_itemsets, rules, ["No association rules found with the given parameters."]
+
+    # Sort rules by the specified metric
+    sorted_rules = rules.sort_values(metric, ascending=False)
+
+    # Format the top rules
+    formatted_rules = []
+    for i, rule in sorted_rules.head(max_results).iterrows():
+        antecedent = ", ".join([item for item in list(rule['antecedents'])])
+        consequent = ", ".join([item for item in list(rule['consequents'])])
+        formatted_rule = (f"{antecedent} => {consequent} "
+                          f"(support: {rule['support']:.3f}, "
+                          f"confidence: {rule['confidence']:.3f}, "
+                          f"lift: {rule['lift']:.3f})")
+        formatted_rules.append(formatted_rule)
+
+    return frequent_itemsets, sorted_rules, formatted_rules
+
+
+def analyze_between_categories(df, antecedent_prefix, consequent_prefix,
+                               min_support=0.01, min_threshold=0.5,
+                               metric="confidence", max_results=10):
+    """
+    Mine association rules between two specific categories
+
+    Parameters:
+    -----------
+    df : pandas DataFrame
+        The preprocessed dataset
+    antecedent_prefix : string
+        Prefix for columns to be used as antecedents
+    consequent_prefix : string
+        Prefix for columns to be used as consequents
+    min_support : float, optional
+        Minimum support for apriori algorithm
+    min_threshold : float, optional
+        Minimum threshold for the specified metric
+    metric : string, optional
+        Metric to use for association rules
+    max_results : int, optional
+        Maximum number of results to return
+
+    Returns:
+    --------
+    tuple : (frequent_itemsets, rules, formatted_rules)
+        frequent_itemsets: DataFrame with frequent itemsets
+        rules: DataFrame with association rules
+        formatted_rules: list of formatted rule strings
+    """
+    # Select columns for both antecedent and consequent
+    all_prefixes = [antecedent_prefix, consequent_prefix]
+    selected_cols = []
+    for prefix in all_prefixes:
+        selected_cols.extend([col for col in df.columns if col.startswith(prefix)])
+
+    if not selected_cols:
+        return None, None, ["No columns matching the specified prefixes were found."]
+
+    selected_df = df[selected_cols]
+
+    # Apply Apriori algorithm
+    frequent_itemsets = apriori(selected_df, min_support=min_support, use_colnames=True)
+
+    if len(frequent_itemsets) == 0:
+        return frequent_itemsets, None, ["No frequent itemsets found with the given minimum support."]
+
+    # Generate association rules
+    rules = association_rules(frequent_itemsets, metric=metric, min_threshold=min_threshold)
+
+    if len(rules) == 0:
+        return frequent_itemsets, rules, ["No association rules found with the given parameters."]
+
+    # Filter rules: antecedent contains only items from antecedent_prefix and
+    # consequent contains only items from consequent_prefix
+    filtered_rules = rules[
+        rules['antecedents'].apply(lambda x: all(antecedent_prefix in item for item in x)) &
+        rules['consequents'].apply(lambda x: all(consequent_prefix in item for item in x))
+        ]
+
+    if len(filtered_rules) == 0:
+        return frequent_itemsets, rules, ["No rules found matching the specified pattern."]
+
+    # Sort rules by lift
+    sorted_rules = filtered_rules.sort_values('lift', ascending=False)
+
+    # Format the top rules
+    formatted_rules = []
+    for i, rule in sorted_rules.head(max_results).iterrows():
+        antecedent = ", ".join([item.replace(f'{antecedent_prefix}_', f'{antecedent_prefix}:')
+                                for item in list(rule['antecedents'])])
+        consequent = ", ".join([item.replace(f'{consequent_prefix}_', f'{consequent_prefix}:')
+                                for item in list(rule['consequents'])])
+        formatted_rule = (f"{antecedent} => {consequent} "
+                          f"(support: {rule['support']:.3f}, "
+                          f"confidence: {rule['confidence']:.3f}, "
+                          f"lift: {rule['lift']:.3f})")
+        formatted_rules.append(formatted_rule)
+
+    return frequent_itemsets, sorted_rules, formatted_rules
+
+
+def association_rule_mining(dataset, categorical_columns=None, violation_column=None, analysis_type=None):
+    """
+    Main function to perform association rule mining on a dataset
+
+    Parameters:
+    -----------
+    dataset : pandas DataFrame or path to CSV
+        The dataset to analyze
+    categorical_columns : list, optional
+        List of categorical columns to include in the analysis
+    violation_column : string, optional
+        Column containing violation text data
+    analysis_type : string, optional
+        Type of analysis to perform:
+        - 'violations': analyze relationships between violations
+        - 'categories': analyze relationships between categorical attributes
+        - 'category_violations': analyze relationships between categories and violations
+        If None, all analyses are performed
+
+    Returns:
+    --------
+    dict : Results of the association rule mining
+    """
+    # Load dataset if provided as path
+    if isinstance(dataset, str):
+        df = pd.read_csv(dataset)
+    else:
+        df = dataset.copy()
+
+    # Define columns if not provided
+    if categorical_columns is None:
+        categorical_columns = [col for col in df.columns if pd.api.types.is_object_dtype(df[col])]
+
+    # Preprocess data
+    trans_df = preprocess_data(df, violation_column)
+
+    results = {}
+
+    # Analysis of violations
+    if analysis_type is None or analysis_type == 'violations':
+        violation_cols = [col for col in trans_df.columns if col.startswith('Violation_')]
+
+        if violation_cols:
+            print("Analyzing association rules between violations...")
+            _, _, formatted_rules = mine_association_rules(
+                trans_df, ['Violation_'], min_support=0.1, min_threshold=1.0
+            )
+            results['violations'] = formatted_rules
+            print("\n".join(formatted_rules))
+        else:
+            results['violations'] = ["No violation data found."]
+            print("No violation data found.")
+
+    # Analysis of categorical attributes
+    if analysis_type is None or analysis_type == 'categories':
+        category_prefixes = []
+        for col in categorical_columns:
+            if col != violation_column:
+                category_prefixes.append(f"{col}_")
+
+        if category_prefixes:
+            print("\nAnalyzing association rules between categorical attributes...")
+            _, _, formatted_rules = mine_association_rules(
+                trans_df, category_prefixes, min_support=0.05, min_threshold=1.0
+            )
+            results['categories'] = formatted_rules
+            print("\n".join(formatted_rules))
+        else:
+            results['categories'] = ["No categorical data specified."]
+            print("No categorical data specified.")
+
+    # Analysis between facility type and violations
+    if analysis_type is None or analysis_type == 'category_violations':
+        violation_cols = [col for col in trans_df.columns if col.startswith('Violation_')]
+
+        if violation_cols and categorical_columns:
+            print("\nAnalyzing association rules between categories and violations...")
+            for col in categorical_columns:
+                if col != violation_column:
+                    print(f"\nRules from {col} to violations:")
+                    _, _, formatted_rules = analyze_between_categories(
+                        trans_df, f"{col}_", "Violation_",
+                        min_support=0.02, min_threshold=0.05
+                    )
+                    results[f'{col}_to_violations'] = formatted_rules
+                    print("\n".join(formatted_rules))
+        else:
+            results['category_violations'] = ["Either no violation data or categorical data found."]
+            print("Either no violation data or categorical data found.")
+
+    return results
+
+
+def repair_dataset_based_on_fd(df, fds_to_fix):
+    """
+    Repair missing values in dataset based on functional dependencies (FD)
+
+    Parameters:
+        df: pandas DataFrame, dataset to be repaired
+        fds_to_fix: list, functional dependencies to repair, format "X → Y"
+
+    Returns:
+        repaired_df: pandas DataFrame, repaired dataset
+        repair_stats: dict, repair statistics
+    """
+
+    print("Starting data repair based on functional dependencies...")
+
+    # Initialize repair suggestions list and statistics
+    repair_suggestions = []
+    repair_stats = {
+        "total_fds": len(fds_to_fix),
+        "repairs_applied": 0,
+        "repairs_skipped": 0,
+        "rows_affected": 0,
+        "fd_details": {}
+    }
+
+    # Process each specified functional dependency
+    for fd_string in fds_to_fix:
+        parts = fd_string.split('→')
+        if len(parts) != 2:
+            print(f"  Warning: Invalid FD format {fd_string}, skipping")
+            continue
+
+        x_attr = parts[0].strip()
+        y_attr = parts[1].strip()
+
+        print(f"\nAnalyzing functional dependency: {x_attr} → {y_attr}")
+
+        # Handle compound attributes (e.g., "dba_name,risk")
+        x_attrs = [x.strip() for x in x_attr.replace('"', '').split(',')]
+
+        # Check if these columns exist
+        if not all(attr in df.columns for attr in x_attrs) or y_attr not in df.columns:
+            print(f"  Warning: Some attributes missing in dataset, skipping")
+            continue
+
+        # Find rows that violate the functional dependency
+        violations = defaultdict(list)
+        groups = df.groupby(x_attrs)
+
+        for name, group in groups:
+            # If one X value corresponds to multiple Y values, there's a violation
+            unique_y_values = group[y_attr].dropna().unique()
+            if len(unique_y_values) > 1:
+                key = tuple(name) if isinstance(name, tuple) else (name,)
+                # Store all non-nan y values for this X
+                violations[key] = unique_y_values.tolist()
+            elif len(unique_y_values) == 1 and group[y_attr].isna().any():
+                # Has null values and one unique non-null value - can be repaired
+                key = tuple(name) if isinstance(name, tuple) else (name,)
+                violations[key] = unique_y_values.tolist()
+
+        # Generate repair suggestions for each violation
+        fd_repairs = 0
+        for x_value, y_values in violations.items():
+            if y_values:  # Ensure we have non-NaN values
+                most_common_y = max(set(y_values), key=y_values.count)
+                repair_suggestions.append({
+                    'fd': fd_string,
+                    'x_value': x_value,
+                    'current_y_values': y_values,
+                    'suggested_y': most_common_y
+                })
+                fd_repairs += 1
+
+        repair_stats["fd_details"][fd_string] = fd_repairs
+        print(f"  Found {fd_repairs} potential repairs")
+
+    # Generate repaired dataset
+    repaired_df = df.copy()
+
+    if repair_suggestions:
+        print("\nCreating repaired dataset...")
+        repairs_applied = 0
+        skipped_repairs = 0
+        total_rows_affected = 0
+
+        for suggestion in repair_suggestions:
+            fd = suggestion['fd']
+            x_value = suggestion['x_value']
+            suggested_y = suggestion['suggested_y']
+
+            x_attrs = [x.strip() for x in fd.split('→')[0].replace('"', '').split(',')]
+            y_attr = fd.split('→')[1].strip()
+
+            # Skip if suggested value is NaN
+            if pd.isna(suggested_y):
+                print(f"  Skipped: {fd} X={x_value} - no non-null value suggestion available")
+                skipped_repairs += 1
+                continue
+
+            # Check for license_number rule
+            skip_due_to_license_rule = False
+            for i, attr in enumerate(x_attrs):
+                if attr == 'license_num':
+                    # For single attribute case
+                    if not isinstance(x_value, tuple) and (x_value == 0 or x_value == 0.0):
+                        print(f"  Skipped: {fd} license_num={x_value} - zero license numbers excluded from repairs")
+                        skip_due_to_license_rule = True
+                        break
+                    # For compound attributes case
+                    elif isinstance(x_value, tuple) and (x_value[i] == 0 or x_value[i] == 0.0):
+                        print(f"  Skipped: {fd} license_num={x_value[i]} - zero license numbers excluded from repairs")
+                        skip_due_to_license_rule = True
+                        break
+
+            if skip_due_to_license_rule:
+                skipped_repairs += 1
+                continue
+
+            # Create filter condition
+            filter_condition = True
+            for i, attr in enumerate(x_attrs):
+                if len(x_attrs) > 1:
+                    filter_condition = filter_condition & (repaired_df[attr] == x_value[i])
+                else:
+                    filter_condition = filter_condition & (repaired_df[attr] == x_value)
+
+            # Only fix NaN values in Y
+            filter_condition = filter_condition & repaired_df[y_attr].isna()
+
+            # Apply fix
+            rows_affected = sum(filter_condition)
+            if rows_affected > 0:
+                repaired_df.loc[filter_condition, y_attr] = suggested_y
+                repairs_applied += 1
+                total_rows_affected += rows_affected
+                print(f"  Fixed: {fd} X={x_value}, set NaN values to {suggested_y} (affected {rows_affected} rows)")
+            else:
+                print(f"  No repair needed: {fd} X={x_value} - no matching NaN values")
+
+        repair_stats["repairs_applied"] = repairs_applied
+        repair_stats["repairs_skipped"] = skipped_repairs
+        repair_stats["rows_affected"] = total_rows_affected
+        print(
+            f"\nRepair complete: Applied {repairs_applied} repairs (skipped {skipped_repairs}), affected {total_rows_affected} rows")
+    else:
+        print("\nNo violations to fix for the specified FDs")
+
+    return repaired_df, repair_stats
 
 ##### DATA PROCESSING ######
 """
@@ -1497,6 +1997,317 @@ def query_to_df(db_name, query):
         print(f"Error running query: {e}")
         return None
 
+def convert_to_tane_input(df):
+    """
+    Convert pandas DataFrame to TANE input format (list of stripped partitions)
+    """
+    partitions = []
+    for col_idx in range(df.shape[1]):
+        # Group records by column values
+        value_dict = {}
+        for row_idx, value in enumerate(df.iloc[:, col_idx]):
+            if value not in value_dict:
+                value_dict[value] = set()
+            value_dict[value].add(row_idx)
+
+        # Keep only partitions with more than one row
+        partition = [indices for indices in value_dict.values() if len(indices) > 1]
+
+        # If PPattern is available, use its fix_desc method
+        if 'PPattern' in globals():
+            partition = PPattern.fix_desc(partition)
+
+        partitions.append(partition)
+
+    return partitions
+
+def run_tane_via_module(df):
+    """
+    Run TANE algorithm by directly using the imported module
+    """
+    # Convert data to TANE format
+    tane_input = convert_to_tane_input(df)
+
+    # Create TANE instance and run
+    tane_instance = TANE(tane_input)
+    start_time = time.time()
+    tane_instance.run()
+    end_time = time.time()
+
+    # Get results and convert to tuple format with column names
+    dependencies = []
+    for lhs, rhs in tane_instance.rules:
+        # Convert attribute indices to column names
+        if isinstance(lhs, tuple):
+            lhs_cols = tuple(df.columns[i] for i in lhs)
+        else:
+            lhs_cols = df.columns[lhs]
+        rhs_col = df.columns[rhs]
+
+        # Calculate dependency strength (always 1.0 for TANE as it finds exact dependencies)
+        dependencies.append((lhs_cols, rhs_col, 1.0))
+
+    return dependencies, end_time - start_time
+
+def visualize_dependencies(deps, title):
+    """
+    Visualize discovered functional dependencies as a network graph
+    """
+    print(f"\nVisualizing {len(deps)} functional dependencies...")
+
+    G = nx.DiGraph()
+
+    # Create nodes and edges
+    for lhs, rhs, strength in deps:
+        # Handle both single attribute and multi-attribute LHS
+        if isinstance(lhs, tuple):
+            # For multiple attributes on LHS, create a combined node
+            lhs_label = " + ".join(str(attr) for attr in lhs)
+            G.add_node(lhs_label, shape='box', style='filled', fillcolor='lightblue')
+
+            # Also add individual attribute nodes and connect them to the combined node
+            for attr in lhs:
+                if attr not in G:
+                    G.add_node(attr, shape='ellipse')
+                G.add_edge(attr, lhs_label, style='dashed', weight=0.5)
+
+            # Connect the combined node to RHS
+            G.add_edge(lhs_label, rhs, width=strength*3, weight=strength, label=f"{strength:.2f}")
+        else:
+            # For single attribute, connect directly
+            if lhs not in G:
+                G.add_node(lhs, shape='ellipse')
+            if rhs not in G:
+                G.add_node(rhs, shape='ellipse')
+            G.add_edge(lhs, rhs, width=strength*3, weight=strength, label=f"{strength:.2f}")
+
+    # Draw the graph
+    plt.figure(figsize=(12, 10))
+    pos = nx.spring_layout(G, k=0.8, iterations=100)
+
+    # Draw nodes
+    node_shapes = nx.get_node_attributes(G, 'shape')
+    for shape in set(node_shapes.values()):
+        nodes = [node for node, s in node_shapes.items() if s == shape]
+        if shape == 'box':
+            nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color='lightblue',
+                                   node_size=3000, node_shape='s')
+        else:
+            nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color='lightgreen',
+                                   node_size=2000, node_shape='o')
+
+    # Draw edges
+    edge_widths = [G[u][v].get('width', 1) for u, v in G.edges()]
+    edge_styles = [G[u][v].get('style', 'solid') for u, v in G.edges()]
+
+    solid_edges = [(u, v) for (u, v), style in zip(G.edges(), edge_styles) if style == 'solid']
+    dashed_edges = [(u, v) for (u, v), style in zip(G.edges(), edge_styles) if style == 'dashed']
+
+    if solid_edges:
+        nx.draw_networkx_edges(G, pos, edgelist=solid_edges, width=edge_widths[:len(solid_edges)])
+    if dashed_edges:
+        nx.draw_networkx_edges(G, pos, edgelist=dashed_edges, width=1, style='dashed')
+
+    # Draw labels
+    nx.draw_networkx_labels(G, pos, font_size=10, font_family='SimHei')
+
+    plt.title(title)
+    plt.axis('off')
+    plt.tight_layout()
+
+    # Save figure
+    plt.savefig(f'{title.replace(" ", "_")}.png', dpi=300)
+    plt.show()
+
+def analyze_important_columns(deps, important_columns=None):
+    """
+    Analyze dependencies for important columns
+    """
+    print("\n========= Important Attribute Dependency Analysis =========")
+
+    if important_columns is None:
+        # If not specified, analyze the 5 most active columns
+        column_involvement = defaultdict(int)
+        for X, Y, _ in deps:
+            if isinstance(X, tuple):
+                for x in X:
+                    column_involvement[x] += 1
+            else:
+                column_involvement[X] += 1
+            column_involvement[Y] += 1
+
+        important_columns = [col for col, _ in sorted(column_involvement.items(),
+                                                      key=lambda x: x[1], reverse=True)[:5]]
+
+    for col in important_columns:
+        # As determining attribute
+        determined = []
+        for X, Y, strength in deps:
+            if isinstance(X, tuple) and col in X:
+                determined.append((X, Y, strength))
+            elif X == col:
+                determined.append((X, Y, strength))
+
+        if determined:
+            print(f"\nAttribute '{col}' helps determine these attributes:")
+            for X, Y, strength in sorted(determined, key=lambda x: x[2], reverse=True):
+                print(f"  {X} → {Y} (strength: {strength:.4f})")
+
+        # As determined attribute
+        determining = [(X, Y, strength) for X, Y, strength in deps if Y == col]
+        if determining:
+            print(f"\nThese attributes determine '{col}':")
+            for X, Y, strength in sorted(determining, key=lambda x: x[2], reverse=True):
+                print(f"  {X} → {Y} (strength: {strength:.4f})")
+
+def find_inclusion_dependencies(df, min_confidence=0.95):
+    """
+    Find inclusion dependencies between columns in a DataFrame
+    
+    Parameters:
+    -----------
+    df : pandas DataFrame
+        The data to analyze
+    min_confidence : float, default=0.95
+        Minimum confidence threshold for inclusion dependencies
+        
+    Returns:
+    --------
+    list of tuples (A, B, confidence)
+        A ⊆ B with confidence score
+    """
+    print("Finding inclusion dependencies...")
+    start_time = time.time()
+
+    # Get unique values for each column
+    unique_values = {}
+    for col in df.columns:
+        unique_values[col] = set(df[col].dropna().unique())
+
+    dependencies = []
+    total_comparisons = len(df.columns) * (len(df.columns) - 1)
+
+    # Check each pair of columns
+    for i, col_a in enumerate(df.columns):
+        for col_b in df.columns:
+            if col_a != col_b:
+                # Skip if col_a has no values
+                if not unique_values[col_a]:
+                    continue
+
+                # Check if values in col_a are subset of values in col_b
+                overlap = unique_values[col_a].intersection(unique_values[col_b])
+                confidence = len(overlap) / len(unique_values[col_a])
+
+                # If confidence meets threshold, record dependency
+                if confidence >= min_confidence:
+                    dependencies.append((col_a, col_b, confidence))
+
+        # Progress update
+        if (i+1) % 5 == 0 or (i+1) == len(df.columns):
+            progress = (i+1) * (len(df.columns) - 1) / total_comparisons * 100
+            print(f"Progress: {progress:.1f}% ({i+1}/{len(df.columns)} columns processed)")
+
+    print(f"Found {len(dependencies)} inclusion dependencies in {time.time() - start_time:.2f} seconds")
+    return dependencies
+
+def visualize_inclusion_dependencies(deps, title):
+    """
+    Visualize discovered inclusion dependencies as a network graph
+    """
+    print(f"\nVisualizing {len(deps)} inclusion dependencies...")
+
+    G = nx.DiGraph()
+
+    # Create nodes and edges
+    for col_a, col_b, confidence in deps:
+        if col_a not in G:
+            G.add_node(col_a, shape='ellipse')
+        if col_b not in G:
+            G.add_node(col_b, shape='ellipse')
+
+        # Edge from A to B means A ⊆ B
+        G.add_edge(col_a, col_b, width=confidence*3, weight=confidence,
+                   label=f"{confidence:.2f}")
+
+    # Draw the graph
+    plt.figure(figsize=(12, 10))
+
+    # Use hierarchical layout for better visualization of inclusion relationships
+    try:
+        pos = nx.nx_agraph.graphviz_layout(G, prog='dot')
+    except:
+        # Fallback to spring layout if graphviz is not available
+        pos = nx.spring_layout(G, k=0.8, iterations=100)
+
+    # Draw nodes
+    nx.draw_networkx_nodes(G, pos, node_color='lightgreen', node_size=2000, node_shape='o')
+
+    # Draw edges with varying width based on confidence
+    edge_widths = [G[u][v].get('width', 1) for u, v in G.edges()]
+    nx.draw_networkx_edges(G, pos, width=edge_widths,
+                           edge_color='blue', alpha=0.7,
+                           arrowsize=20, connectionstyle='arc3,rad=0.1')
+
+    # Draw labels
+    nx.draw_networkx_labels(G, pos, font_size=10, font_family='SimHei')
+
+    # Edge labels (confidences)
+    edge_labels = nx.get_edge_attributes(G, 'label')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8)
+
+    plt.title(title)
+    plt.axis('off')
+    plt.tight_layout()
+
+    # Save figure
+    plt.savefig(f'{title.replace(" ", "_")}.png', dpi=300)
+    plt.show()
+
+def analyze_inclusion_dependencies(deps):
+    """
+    Analyze inclusion dependencies to extract insights
+    """
+    print("\n========= Inclusion Dependency Analysis =========")
+
+    # Find columns that are subsets of many other columns
+    subset_counts = defaultdict(int)
+    for col_a, _, _ in deps:
+        subset_counts[col_a] += 1
+
+    # Find columns that contain many other columns
+    superset_counts = defaultdict(int)
+    for _, col_b, _ in deps:
+        superset_counts[col_b] += 1
+
+    # Print top columns that are subsets of others
+    print("\nTop columns that are subsets of others (potential foreign keys):")
+    for col, count in sorted(subset_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {col}: contained in {count} other columns")
+
+    # Print top columns that contain others
+    print("\nTop columns that contain other columns (potential reference tables):")
+    for col, count in sorted(superset_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {col}: contains {count} other columns")
+
+    # Find chains of inclusion dependencies
+    print("\nChains of inclusion dependencies (transitive relationships):")
+    for a, b, conf_ab in deps:
+        for c, d, conf_cd in deps:
+            if b == c and a != d:
+                print(f"  {a} ⊆ {b} ⊆ {d} (confidence: {conf_ab:.2f}, {conf_cd:.2f})")
+
+    # Find bidirectional (equivalent) dependencies
+    print("\nBidirectional dependencies (equivalent columns):")
+    bidirectional = []
+    for a, b, conf_ab in deps:
+        for c, d, conf_cd in deps:
+            if a == d and b == c and a != b and (a, b) not in bidirectional and (b, a) not in bidirectional:
+                bidirectional.append((a, b))
+                print(f"  {a} ≡ {b} (confidence: {conf_ab:.2f}, {conf_cd:.2f})")
+
+
+
 if __name__ == '__main__':
     food_dataset = pd.read_csv("Food_Inspections_20250216.csv",  dtype={'License #': str, 'Zip': str})
     updated_food_dataset = food_dataset.copy()
@@ -1517,8 +2328,20 @@ if __name__ == '__main__':
     updated_food_dataset = standardize_name_columns(updated_food_dataset)
     updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updated_food_dataset['dba_name'])
     updated_food_dataset = fix_city_name(updated_food_dataset)
+
     updated_food_dataset = clean_facility_type_column(updated_food_dataset)
     updated_food_dataset = clean_city_column(updated_food_dataset)
+
+    fds_to_fix = [#derived from AFD, obmitted in this script
+        "dba_name → facility_type",
+        "address → zip",
+        "location → zip",
+        "address → city",
+        "address,inspection_date → facility_type",
+        "aka_name,inspection_date → location"
+    ]
+    updated_food_dataset, stats = repair_dataset_based_on_fd(updated_food_dataset, fds_to_fix)
+
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
@@ -1533,12 +2356,68 @@ if __name__ == '__main__':
     check_city_state_spelling(updated_food_dataset)
     profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
-    
+
     ##### INGESTING TO SQL DATABASE #####
+
+
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
-    facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
+    profile_violations_normalized(violations_df)
+    
+    result = association_rule_mining(
+        updated_food_dataset,
+        categorical_columns=['facility_type', 'risk', 'results', 'inspection_type'],
+        violation_column='violations'
+    )
     
     # Save tables to SQLite database
+    facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
     df_to_sqlite(violations_df, 'food_inspections.db', 'violations', if_exists='replace', index=False)
     df_to_sqlite(facility_df, 'food_inspections.db', 'facility', if_exists='replace', index=False)
     df_to_sqlite(inspection_df, 'food_inspections.db', 'inspection', if_exists='replace', index=False)
+
+    #TANE set up
+    columns_to_exclude = ['violations']
+    # Select subset of columns to speed up algorithm
+    df_analysis = updated_food_dataset.drop(columns=columns_to_exclude)
+    df_analysis = updated_food_dataset.dropna()
+    float_cols = updated_food_dataset.select_dtypes(include=["float64"]).columns
+    updated_food_dataset[float_cols] = updated_food_dataset[float_cols].astype(str)
+
+    #TANE
+    print("Running TANE via direct module import...")
+    start = time.time()
+    dependencies, runtime = run_tane_via_module(df_analysis)
+    print(f"\nTANE algorithm runtime: {runtime:.2f} seconds")
+    print(f"Total functional dependencies discovered: {len(dependencies)}")
+
+    if dependencies:
+      print("\nSome functional dependencies discovered by TANE algorithm:")
+      for dep in sorted(dependencies, key=lambda x: x[2], reverse=True)[:15]:
+          X_str = str(dep[0])
+          print(f"{X_str} → {dep[1]} (strength: {dep[2]:.4f})")
+        
+    if dependencies:
+        important_columns = ['inspection_id', 'license_num', 'facility_type', 'risk', 'results']
+        analyze_important_columns(dependencies, important_columns)
+    else:
+        print("No functional dependencies discovered or unable to parse results.")
+
+    #IND
+    columns_to_exclude = ['violations' ]
+    columns_to_include = ['inspection_id', 'dba_name', 'aka_name', 'license_num',
+                        'facility_type', 'risk', 'city', 'state', 'zip',
+                        'inspection_type', 'results','location']
+    df_analysis = updated_food_dataset.drop(columns=columns_to_exclude)[columns_to_include]
+    df_analysis = df_analysis.fillna('__NULL__')
+
+    inclusion_deps = find_inclusion_dependencies(df_analysis, min_confidence=0.95)
+    inclusion_deps = find_inclusion_dependencies(df_analysis, min_confidence=0.95)
+  
+    if inclusion_deps:
+        print("\nSome inclusion dependencies discovered:")
+        for dep in sorted(inclusion_deps, key=lambda x: x[2], reverse=True)[:10]:
+            print(f"{dep[0]} ⊆ {dep[1]} (confidence: {dep[2]:.4f})")
+    if inclusion_deps:
+        print("\nSome inclusion dependencies discovered:")
+        for dep in sorted(inclusion_deps, key=lambda x: x[2], reverse=True)[:10]:
+            print(f"{dep[0]} ⊆ {dep[1]} (confidence: {dep[2]:.4f})")

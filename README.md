@@ -45,6 +45,7 @@ These tables are then stored in a SQLite database called `food_inspections.db`
     ```bash
     python data_preparation.py
     ```
+    or use the example.ipynb notebook and execute cells in order.
 6. Review the profiling results to understand data quality
 7. Access the normalized data in the SQLite database
 
