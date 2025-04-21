@@ -7,6 +7,163 @@ from fuzzywuzzy import fuzz, process
 import sqlite3
 from datetime import datetime
 
+##### DATA PROFILING #####
+
+def analyze_violations_structure(df, sample_size=100):
+    """
+    Analyze the structure of the 'violations' column in the dataframe.
+    
+    Parameters:
+    sample_size (int): Number of non-empty violation entries to analyze
+    
+    Returns:
+    dict: Analysis results including patterns found, separator counts, etc.
+    
+    Example usage: 
+    analyze_violations_structure(updated_food_dataset, sample_size=1000)
+    """
+    # Get sample of non-empty violations
+    df['violations'] = df['violations'].fillna('')
+    violations_sample = df.loc[df['violations'] != '', 'violations'].head(sample_size)
+    
+    # Initialize analysis results
+    analysis = {
+        'total_samples': len(violations_sample),
+        'avg_length': violations_sample.str.len().mean(),
+        'separator_counts': {},
+        'violation_counts': [],
+        'common_patterns': [],
+        'sample_entries': []
+    }
+    
+    # Count separators
+    for sep in ['|', '.', '-', ':', ';']:
+        analysis['separator_counts'][sep] = violations_sample.str.count(sep).mean()
+    
+    # Count violations per entry
+    violations_per_entry = violations_sample.apply(lambda x: len([v for v in x.split('|') if v.strip()]))
+    analysis['violations_per_entry'] = {
+        'min': violations_per_entry.min(),
+        'max': violations_per_entry.max(),
+        'avg': violations_per_entry.mean(),
+        'distribution': violations_per_entry.value_counts().to_dict()
+    }
+    
+    # Check for common patterns
+    # Look for digit followed by period at the start of each violation
+    starts_with_digit = violations_sample.apply(
+        lambda x: all(re.match(r'^\s*\d+\.', v.strip()) for v in x.split('|') if v.strip())
+    ).mean()
+    analysis['common_patterns'].append(f"{starts_with_digit*100:.1f}% start with digits followed by period")
+    
+    # Check for "Comments:" pattern
+    has_comments = violations_sample.apply(
+        lambda x: any("Comments:" in v for v in x.split('|'))
+    ).mean()
+    analysis['common_patterns'].append(f"{has_comments*100:.1f}% contain 'Comments:' text")
+    
+    # Sample entries
+    analysis['sample_entries'] = violations_sample.sample(min(5, len(violations_sample))).tolist()
+    
+    print("violations Column Structure Analysis:")
+    for key, value in analysis.items():
+        if key != 'sample_entries':
+            print(f"\n{key.replace('_', ' ').title()}:")
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    print(f"  - {k}: {v}")
+            elif isinstance(value, list):
+                for item in value:
+                    print(f"  - {item}")
+            else:
+                print(f"  {value}")
+    
+    return analysis
+
+def verify_violations_structure(df, structure=r"^\s*\d+\.\s+.+?(\s+-\s+Comments:\s*.+)?$",sample_size=None):
+    """
+    Verify that all values in the 'violations' column follow the structure:
+    "Code. Category - Comments: Comment text" with parts separated by "|"
+    
+    Parameters:
+    df (DataFrame): DataFrame containing 'violations' column
+    sample_size (int, optional): Number of non-empty violations to check. If None, check all.
+    
+    Returns:
+    dict: Results of verification including:
+        - total_checked: Number of entries checked
+        - valid_entries: Number of entries following the expected pattern
+        - invalid_entries: Number of entries not following the expected pattern
+        - validity_percentage: Percentage of valid entries
+        - sample_invalid: Examples of invalid entries (up to 5)
+        
+    Example usage:
+    verify_violations_structure(updated_food_dataset)
+    """
+    # Fill NaN values with empty string
+    violations = df['violations'].fillna('')
+    
+    # Filter out empty violations
+    non_empty_violations = violations[violations != '']
+    
+    # Take a sample if specified
+    if sample_size is not None:
+        violations_to_check = non_empty_violations.sample(min(sample_size, len(non_empty_violations)))
+    else:
+        violations_to_check = non_empty_violations
+    
+    # Define the expected pattern for each violation
+    pattern = structure
+    
+    # Check each violation entry
+    results = {
+        'total_checked': 0,
+        'valid_entries': 0,
+        'invalid_entries': 0,
+        'validity_percentage': 0,
+        'sample_invalid': []
+    }
+    
+    invalid_entries = []
+    
+    for violation_text in violations_to_check:
+        results['total_checked'] += 1
+        parts = [part.strip() for part in violation_text.split('|') if part.strip()]
+        
+        # If there are no parts, count as invalid
+        if not parts:
+            results['invalid_entries'] += 1
+            if len(results['sample_invalid']) < 5:
+                results['sample_invalid'].append(violation_text if len(violation_text) > 100 else violation_text)
+            continue
+        
+        # Check each part against the pattern
+        all_parts_valid = all(re.match(pattern, part) for part in parts)
+        
+        if all_parts_valid:
+            results['valid_entries'] += 1
+        else:
+            results['invalid_entries'] += 1
+            invalid_entries.append(violation_text)
+            if len(results['sample_invalid']) < 5:
+                results['sample_invalid'].append(violation_text if len(violation_text) > 100 else violation_text)
+    
+    # Calculate percentage of valid entries
+    if results['total_checked'] > 0:
+        results['validity_percentage'] = round(results['valid_entries'] / results['total_checked'] * 100, 2)
+        
+    print("Violations Structure Verification Results:")
+    print(results)
+    
+    return results
+
+
+
+
+
+
+
+##### DATA PROCESSING ######
 """
 try to normalize data cleaning and evaluate data quility
 1. imputation of missing values
@@ -604,6 +761,11 @@ if __name__ == '__main__':
     updated_food_dataset = food_dataset.copy()
     # Apply function
     updated_food_dataset = col_name_changer(updated_food_dataset)
+    ##### DATA PROFILING #####
+    analyze_violations_structure(updated_food_dataset, sample_size=1000)
+    verify_violations_structure(updated_food_dataset)
+    
+    ##### DATA PROCESSING #####
     updated_food_dataset = process_license_numbers(updated_food_dataset)
     updated_food_dataset = clean_zip_data(updated_food_dataset).drop(columns=['zip','zip_valid'],axis=1).rename(columns={'zip_clean':'zip'})
     updated_food_dataset['state'] = updated_food_dataset.apply(
