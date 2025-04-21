@@ -1868,7 +1868,7 @@ def clean_facility_type_column(updated_food_dataset):
         
         return {**common_typos, **potential_typos}
 
-    typo_dict = detect_typos(updated_food_dataset['Facility Type'])
+    typo_dict = detect_typos(updated_food_dataset['facility_type'])
 
     def preprocess_facility_type(text):
         if pd.isna(text):
@@ -1934,7 +1934,7 @@ def clean_facility_type_column(updated_food_dataset):
 
         return text.title() if text != '' else np.nan
 
-    updated_food_dataset['Facility_Type_Clean'] = updated_food_dataset['Facility Type'].apply(preprocess_facility_type)
+    updated_food_dataset['Facility_Type_Clean'] = updated_food_dataset['facility_type'].apply(preprocess_facility_type)
 
     def consolidate_facility_types(series):
         protected_terms = {
@@ -2015,7 +2015,7 @@ def clean_facility_type_column(updated_food_dataset):
         return series.apply(mapper)
 
     df_clean = updated_food_dataset.dropna(subset=['Facility_Type_Clean']).copy()
-    df_clean['Facility Type'] = consolidate_facility_types(df_clean['Facility_Type_Clean'])
+    df_clean['facility_type'] = consolidate_facility_types(df_clean['Facility_Type_Clean'])
 
     return df_clean.drop(columns=['Facility_Type_Clean'])
 
@@ -2051,7 +2051,7 @@ def clean_city_column(updated_food_dataset):
             return best_match[0]
         return city
 
-    def detect_and_correct_city_typos(df, city_col='City'):
+    def detect_and_correct_city_typos(df, city_col='city'):
         df_clean = df.copy()
         df_clean[city_col] = df_clean[city_col].astype(str).apply(clean_city_name)
         df_clean = df_clean[df_clean[city_col] != '']
@@ -2104,8 +2104,8 @@ def clean_city_column(updated_food_dataset):
         return df_clean
 
     # --- Apply the cleaning to the input dataset ---
-    result_df = detect_and_correct_city_typos(updated_food_dataset, city_col='City')
-    updated_food_dataset['City'] = result_df['City_Cleaned']
+    result_df = detect_and_correct_city_typos(updated_food_dataset, city_col='city')
+    updated_food_dataset['city'] = result_df['city_Cleaned']
     return updated_food_dataset
 
 
@@ -2636,6 +2636,19 @@ if __name__ == '__main__':
     updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updated_food_dataset['dba_name'])
     updated_food_dataset = fix_city_name(updated_food_dataset)
 
+    updated_food_dataset = clean_facility_type_column(updated_food_dataset)
+    updated_food_dataset = clean_city_column(updated_food_dataset)
+
+    fds_to_fix = [#derived from AFD, obmitted in this script
+        "dba_name → facility_type",
+        "address → zip",
+        "location → zip",
+        "address → city",
+        "address,inspection_date → facility_type",
+        "aka_name,inspection_date → location"
+    ]
+    updated_food_dataset, stats = repair_dataset_based_on_fd(updated_food_dataset, fds_to_fix)
+
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
@@ -2668,7 +2681,9 @@ if __name__ == '__main__':
     profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
 
+    plot_city_wordcloud_and_freq_table(updated_food_dataset)
 
+    ##### INGESTING TO SQL DATABASE #####
 
 
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
@@ -2679,8 +2694,6 @@ if __name__ == '__main__':
         categorical_columns=['facility_type', 'risk', 'results', 'inspection_type'],
         violation_column='violations'
     )
-    
-    ##### INGESTING TO SQL DATABASE #####
     
     # Save tables to SQLite database
     facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
