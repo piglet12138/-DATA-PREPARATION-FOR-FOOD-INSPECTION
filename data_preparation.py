@@ -11,6 +11,26 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import networkx as nx
+import time
+from collections import defaultdict
+from itertools import combinations
+import sys
+from tqdm import tqdm
+from tane import TANE, PPattern, read_db, tostr
+tane_imported = True
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import networkx as nx
+import time
+from collections import defaultdict
+
+
+
 ##### DATA PROFILING #####
 
 def profile_name(df, dba_col='dba_name', aka_col='aka_name', 
@@ -623,7 +643,33 @@ def verify_violations_structure(df, structure=r"^\s*\d+\.\s+.+?(\s+-\s+Comments:
 
 
 
+def profile_violations(violations_df):
+    '''
+    Function to profile the violations data.
+    '''
+    # Get counts of each code_category and sort
+    violations_df['code_category'] = violations_df['violation_code'].astype('str') + '-' + violations_df['category'].str[:40]
+    code_category_counts = violations_df['code_category'].value_counts().reset_index()
+    code_category_counts.columns = ['code_category', 'count']
+    code_category_counts = code_category_counts.head(20)  # Top 20
 
+    # Create figure with larger size for readability
+    plt.figure(figsize=(14, 10))
+
+    # Create horizontal bar chart
+    sns.barplot(x='count', y='code_category', data=code_category_counts, palette='viridis')
+
+    # Add title and labels
+    plt.title('Top 20 Most Common Violation Code-Categories', fontsize=16)
+    plt.xlabel('Count', fontsize=12)
+    plt.ylabel('Violation Code-Category', fontsize=12)
+    plt.tight_layout()
+
+    # Add count values at the end of each bar
+    for i, v in enumerate(code_category_counts['count']):
+        plt.text(v + 0.1, i, f"{v:,}", va='center')
+
+    plt.show()
 
 
 ##### DATA PROCESSING ######
@@ -1219,6 +1265,317 @@ def query_to_df(db_name, query):
         print(f"Error running query: {e}")
         return None
 
+def convert_to_tane_input(df):
+    """
+    Convert pandas DataFrame to TANE input format (list of stripped partitions)
+    """
+    partitions = []
+    for col_idx in range(df.shape[1]):
+        # Group records by column values
+        value_dict = {}
+        for row_idx, value in enumerate(df.iloc[:, col_idx]):
+            if value not in value_dict:
+                value_dict[value] = set()
+            value_dict[value].add(row_idx)
+
+        # Keep only partitions with more than one row
+        partition = [indices for indices in value_dict.values() if len(indices) > 1]
+
+        # If PPattern is available, use its fix_desc method
+        if 'PPattern' in globals():
+            partition = PPattern.fix_desc(partition)
+
+        partitions.append(partition)
+
+    return partitions
+
+def run_tane_via_module(df):
+    """
+    Run TANE algorithm by directly using the imported module
+    """
+    # Convert data to TANE format
+    tane_input = convert_to_tane_input(df)
+
+    # Create TANE instance and run
+    tane_instance = TANE(tane_input)
+    start_time = time.time()
+    tane_instance.run()
+    end_time = time.time()
+
+    # Get results and convert to tuple format with column names
+    dependencies = []
+    for lhs, rhs in tane_instance.rules:
+        # Convert attribute indices to column names
+        if isinstance(lhs, tuple):
+            lhs_cols = tuple(df.columns[i] for i in lhs)
+        else:
+            lhs_cols = df.columns[lhs]
+        rhs_col = df.columns[rhs]
+
+        # Calculate dependency strength (always 1.0 for TANE as it finds exact dependencies)
+        dependencies.append((lhs_cols, rhs_col, 1.0))
+
+    return dependencies, end_time - start_time
+
+def visualize_dependencies(deps, title):
+    """
+    Visualize discovered functional dependencies as a network graph
+    """
+    print(f"\nVisualizing {len(deps)} functional dependencies...")
+
+    G = nx.DiGraph()
+
+    # Create nodes and edges
+    for lhs, rhs, strength in deps:
+        # Handle both single attribute and multi-attribute LHS
+        if isinstance(lhs, tuple):
+            # For multiple attributes on LHS, create a combined node
+            lhs_label = " + ".join(str(attr) for attr in lhs)
+            G.add_node(lhs_label, shape='box', style='filled', fillcolor='lightblue')
+
+            # Also add individual attribute nodes and connect them to the combined node
+            for attr in lhs:
+                if attr not in G:
+                    G.add_node(attr, shape='ellipse')
+                G.add_edge(attr, lhs_label, style='dashed', weight=0.5)
+
+            # Connect the combined node to RHS
+            G.add_edge(lhs_label, rhs, width=strength*3, weight=strength, label=f"{strength:.2f}")
+        else:
+            # For single attribute, connect directly
+            if lhs not in G:
+                G.add_node(lhs, shape='ellipse')
+            if rhs not in G:
+                G.add_node(rhs, shape='ellipse')
+            G.add_edge(lhs, rhs, width=strength*3, weight=strength, label=f"{strength:.2f}")
+
+    # Draw the graph
+    plt.figure(figsize=(12, 10))
+    pos = nx.spring_layout(G, k=0.8, iterations=100)
+
+    # Draw nodes
+    node_shapes = nx.get_node_attributes(G, 'shape')
+    for shape in set(node_shapes.values()):
+        nodes = [node for node, s in node_shapes.items() if s == shape]
+        if shape == 'box':
+            nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color='lightblue',
+                                   node_size=3000, node_shape='s')
+        else:
+            nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color='lightgreen',
+                                   node_size=2000, node_shape='o')
+
+    # Draw edges
+    edge_widths = [G[u][v].get('width', 1) for u, v in G.edges()]
+    edge_styles = [G[u][v].get('style', 'solid') for u, v in G.edges()]
+
+    solid_edges = [(u, v) for (u, v), style in zip(G.edges(), edge_styles) if style == 'solid']
+    dashed_edges = [(u, v) for (u, v), style in zip(G.edges(), edge_styles) if style == 'dashed']
+
+    if solid_edges:
+        nx.draw_networkx_edges(G, pos, edgelist=solid_edges, width=edge_widths[:len(solid_edges)])
+    if dashed_edges:
+        nx.draw_networkx_edges(G, pos, edgelist=dashed_edges, width=1, style='dashed')
+
+    # Draw labels
+    nx.draw_networkx_labels(G, pos, font_size=10, font_family='SimHei')
+
+    plt.title(title)
+    plt.axis('off')
+    plt.tight_layout()
+
+    # Save figure
+    plt.savefig(f'{title.replace(" ", "_")}.png', dpi=300)
+    plt.show()
+
+def analyze_important_columns(deps, important_columns=None):
+    """
+    Analyze dependencies for important columns
+    """
+    print("\n========= Important Attribute Dependency Analysis =========")
+
+    if important_columns is None:
+        # If not specified, analyze the 5 most active columns
+        column_involvement = defaultdict(int)
+        for X, Y, _ in deps:
+            if isinstance(X, tuple):
+                for x in X:
+                    column_involvement[x] += 1
+            else:
+                column_involvement[X] += 1
+            column_involvement[Y] += 1
+
+        important_columns = [col for col, _ in sorted(column_involvement.items(),
+                                                      key=lambda x: x[1], reverse=True)[:5]]
+
+    for col in important_columns:
+        # As determining attribute
+        determined = []
+        for X, Y, strength in deps:
+            if isinstance(X, tuple) and col in X:
+                determined.append((X, Y, strength))
+            elif X == col:
+                determined.append((X, Y, strength))
+
+        if determined:
+            print(f"\nAttribute '{col}' helps determine these attributes:")
+            for X, Y, strength in sorted(determined, key=lambda x: x[2], reverse=True):
+                print(f"  {X} → {Y} (strength: {strength:.4f})")
+
+        # As determined attribute
+        determining = [(X, Y, strength) for X, Y, strength in deps if Y == col]
+        if determining:
+            print(f"\nThese attributes determine '{col}':")
+            for X, Y, strength in sorted(determining, key=lambda x: x[2], reverse=True):
+                print(f"  {X} → {Y} (strength: {strength:.4f})")
+
+def find_inclusion_dependencies(df, min_confidence=0.95):
+    """
+    Find inclusion dependencies between columns in a DataFrame
+    
+    Parameters:
+    -----------
+    df : pandas DataFrame
+        The data to analyze
+    min_confidence : float, default=0.95
+        Minimum confidence threshold for inclusion dependencies
+        
+    Returns:
+    --------
+    list of tuples (A, B, confidence)
+        A ⊆ B with confidence score
+    """
+    print("Finding inclusion dependencies...")
+    start_time = time.time()
+
+    # Get unique values for each column
+    unique_values = {}
+    for col in df.columns:
+        unique_values[col] = set(df[col].dropna().unique())
+
+    dependencies = []
+    total_comparisons = len(df.columns) * (len(df.columns) - 1)
+
+    # Check each pair of columns
+    for i, col_a in enumerate(df.columns):
+        for col_b in df.columns:
+            if col_a != col_b:
+                # Skip if col_a has no values
+                if not unique_values[col_a]:
+                    continue
+
+                # Check if values in col_a are subset of values in col_b
+                overlap = unique_values[col_a].intersection(unique_values[col_b])
+                confidence = len(overlap) / len(unique_values[col_a])
+
+                # If confidence meets threshold, record dependency
+                if confidence >= min_confidence:
+                    dependencies.append((col_a, col_b, confidence))
+
+        # Progress update
+        if (i+1) % 5 == 0 or (i+1) == len(df.columns):
+            progress = (i+1) * (len(df.columns) - 1) / total_comparisons * 100
+            print(f"Progress: {progress:.1f}% ({i+1}/{len(df.columns)} columns processed)")
+
+    print(f"Found {len(dependencies)} inclusion dependencies in {time.time() - start_time:.2f} seconds")
+    return dependencies
+
+def visualize_inclusion_dependencies(deps, title):
+    """
+    Visualize discovered inclusion dependencies as a network graph
+    """
+    print(f"\nVisualizing {len(deps)} inclusion dependencies...")
+
+    G = nx.DiGraph()
+
+    # Create nodes and edges
+    for col_a, col_b, confidence in deps:
+        if col_a not in G:
+            G.add_node(col_a, shape='ellipse')
+        if col_b not in G:
+            G.add_node(col_b, shape='ellipse')
+
+        # Edge from A to B means A ⊆ B
+        G.add_edge(col_a, col_b, width=confidence*3, weight=confidence,
+                   label=f"{confidence:.2f}")
+
+    # Draw the graph
+    plt.figure(figsize=(12, 10))
+
+    # Use hierarchical layout for better visualization of inclusion relationships
+    try:
+        pos = nx.nx_agraph.graphviz_layout(G, prog='dot')
+    except:
+        # Fallback to spring layout if graphviz is not available
+        pos = nx.spring_layout(G, k=0.8, iterations=100)
+
+    # Draw nodes
+    nx.draw_networkx_nodes(G, pos, node_color='lightgreen', node_size=2000, node_shape='o')
+
+    # Draw edges with varying width based on confidence
+    edge_widths = [G[u][v].get('width', 1) for u, v in G.edges()]
+    nx.draw_networkx_edges(G, pos, width=edge_widths,
+                           edge_color='blue', alpha=0.7,
+                           arrowsize=20, connectionstyle='arc3,rad=0.1')
+
+    # Draw labels
+    nx.draw_networkx_labels(G, pos, font_size=10, font_family='SimHei')
+
+    # Edge labels (confidences)
+    edge_labels = nx.get_edge_attributes(G, 'label')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8)
+
+    plt.title(title)
+    plt.axis('off')
+    plt.tight_layout()
+
+    # Save figure
+    plt.savefig(f'{title.replace(" ", "_")}.png', dpi=300)
+    plt.show()
+
+def analyze_inclusion_dependencies(deps):
+    """
+    Analyze inclusion dependencies to extract insights
+    """
+    print("\n========= Inclusion Dependency Analysis =========")
+
+    # Find columns that are subsets of many other columns
+    subset_counts = defaultdict(int)
+    for col_a, _, _ in deps:
+        subset_counts[col_a] += 1
+
+    # Find columns that contain many other columns
+    superset_counts = defaultdict(int)
+    for _, col_b, _ in deps:
+        superset_counts[col_b] += 1
+
+    # Print top columns that are subsets of others
+    print("\nTop columns that are subsets of others (potential foreign keys):")
+    for col, count in sorted(subset_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {col}: contained in {count} other columns")
+
+    # Print top columns that contain others
+    print("\nTop columns that contain other columns (potential reference tables):")
+    for col, count in sorted(superset_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {col}: contains {count} other columns")
+
+    # Find chains of inclusion dependencies
+    print("\nChains of inclusion dependencies (transitive relationships):")
+    for a, b, conf_ab in deps:
+        for c, d, conf_cd in deps:
+            if b == c and a != d:
+                print(f"  {a} ⊆ {b} ⊆ {d} (confidence: {conf_ab:.2f}, {conf_cd:.2f})")
+
+    # Find bidirectional (equivalent) dependencies
+    print("\nBidirectional dependencies (equivalent columns):")
+    bidirectional = []
+    for a, b, conf_ab in deps:
+        for c, d, conf_cd in deps:
+            if a == d and b == c and a != b and (a, b) not in bidirectional and (b, a) not in bidirectional:
+                bidirectional.append((a, b))
+                print(f"  {a} ≡ {b} (confidence: {conf_ab:.2f}, {conf_cd:.2f})")
+
+
+
 if __name__ == '__main__':
     food_dataset = pd.read_csv("Food_Inspections_20250216.csv",  dtype={'License #': str, 'Zip': str})
     updated_food_dataset = food_dataset.copy()
@@ -1254,12 +1611,55 @@ if __name__ == '__main__':
     profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
     
+    violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
+    profile_violations(violations_df)
     
     ##### INGESTING TO SQL DATABASE #####
-    violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
     facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
     
     # Save tables to SQLite database
     df_to_sqlite(violations_df, 'food_inspections.db', 'violations', if_exists='replace', index=False)
     df_to_sqlite(facility_df, 'food_inspections.db', 'facility', if_exists='replace', index=False)
     df_to_sqlite(inspection_df, 'food_inspections.db', 'inspection', if_exists='replace', index=False)
+
+    #TANE set up
+    columns_to_exclude = ['violations']
+    # Select subset of columns to speed up algorithm
+    df_analysis = df.drop(columns=columns_to_exclude)
+    df_analysis = df_analysis.dropna()
+    float_cols = df.select_dtypes(include=["float64"]).columns
+    df[float_cols] = df[float_cols].astype(str)
+
+    #TANE
+    print("Running TANE via direct module import...")
+    start = time.time()
+    dependencies, runtime = run_tane_via_module(df_analysis)
+    print(f"\nTANE algorithm runtime: {runtime:.2f} seconds")
+    print(f"Total functional dependencies discovered: {len(dependencies)}")
+
+    if dependencies:
+      print("\nSome functional dependencies discovered by TANE algorithm:")
+      for dep in sorted(dependencies, key=lambda x: x[2], reverse=True)[:15]:
+          X_str = str(dep[0])
+          print(f"{X_str} → {dep[1]} (strength: {dep[2]:.4f})")
+        
+    if dependencies:
+        important_columns = ['Inspection ID', 'License #', 'Facility Type', 'Risk', 'Results']
+        analyze_important_columns(dependencies, important_columns)
+    else:
+        print("No functional dependencies discovered or unable to parse results.")
+
+  #IND
+  columns_to_exclude = ['Violations' ]
+  columns_to_include = ['Inspection ID', 'DBA Name', 'AKA Name', 'License #',
+                        'Facility Type', 'Risk', 'City', 'State', 'Zip',
+                        'Inspection Type', 'Results','Location']
+  df_analysis = df.drop(columns=columns_to_exclude)[columns_to_include]
+  df_analysis = df_analysis.fillna('__NULL__')
+
+  inclusion_deps = find_inclusion_dependencies(df_analysis, min_confidence=0.95)
+  
+  if inclusion_deps:
+      print("\nSome inclusion dependencies discovered:")
+      for dep in sorted(inclusion_deps, key=lambda x: x[2], reverse=True)[:10]:
+          print(f"{dep[0]} ⊆ {dep[1]} (confidence: {dep[2]:.4f})")
