@@ -2635,19 +2635,6 @@ if __name__ == '__main__':
     updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updated_food_dataset['dba_name'])
     updated_food_dataset = fix_city_name(updated_food_dataset)
 
-    updated_food_dataset = clean_facility_type_column(updated_food_dataset)
-    updated_food_dataset = clean_city_column(updated_food_dataset)
-
-    fds_to_fix = [#derived from AFD, obmitted in this script
-        "dba_name → facility_type",
-        "address → zip",
-        "location → zip",
-        "address → city",
-        "address,inspection_date → facility_type",
-        "aka_name,inspection_date → location"
-    ]
-    updated_food_dataset, stats = repair_dataset_based_on_fd(updated_food_dataset, fds_to_fix)
-
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
@@ -2680,9 +2667,7 @@ if __name__ == '__main__':
     profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
 
-    plot_city_wordcloud_and_freq_table(updated_food_dataset)
 
-    ##### INGESTING TO SQL DATABASE #####
 
 
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
@@ -2693,6 +2678,8 @@ if __name__ == '__main__':
         categorical_columns=['facility_type', 'risk', 'results', 'inspection_type'],
         violation_column='violations'
     )
+    
+    ##### INGESTING TO SQL DATABASE #####
     
     # Save tables to SQLite database
     facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
