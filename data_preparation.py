@@ -10,6 +10,8 @@ from difflib import get_close_matches, SequenceMatcher
 from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
+from collections import Counter, defaultdict
+from string import capwords
 
 ##### DATA PROFILING #####
 
@@ -1023,6 +1025,282 @@ def fix_city_name(df, city_col='city', threshold=85):
     
     return df
 
+def clean_facility_type_column(updated_food_dataset):
+
+    def detect_typos(text_series, min_word_length=4, min_count=10, similarity_threshold=90):
+        words = []
+        for text in text_series.dropna():
+            extracted = [w.lower() for w in re.findall(r"\b[\w']+\b", str(text)) 
+                         if len(w) >= min_word_length and not w.isdigit()]
+            words.extend(extracted)
+        
+        word_counts = Counter(words)
+        common_words = {word for word, count in word_counts.items() if count >= min_count}
+        
+        common_typos = {
+            'childern': 'children',
+            'assissted': 'assisted',
+            'restuarant': 'restaurant',
+            'commisary': 'commissary',
+            'convnience': 'convenience',
+            'liquore': 'liquor',
+            'facilty': 'facility',
+            'nutriton': 'nutrition',
+            'herbalcal': 'herbalife',
+            'cafetaria': 'cafeteria',
+            'poulty': 'poultry',
+            'hooka': 'hookah'
+        }
+        
+        potential_typos = {}
+        for word in word_counts:
+            if word not in common_typos and word not in common_words:
+                matches = process.extract(word, common_words, limit=1)
+                if matches and matches[0][1] >= similarity_threshold:
+                    if word[0] == matches[0][0][0]:
+                        potential_typos[word] = matches[0][0]
+        
+        return {**common_typos, **potential_typos}
+
+    typo_dict = detect_typos(updated_food_dataset['Facility Type'])
+
+    def preprocess_facility_type(text):
+        if pd.isna(text):
+            return np.nan
+
+        text = str(text).strip()
+        text = re.sub(r'\b\d{4}\b', '', text).strip()
+        if text.startswith('(') and text.endswith(')'):
+            text = text[1:-1].strip()
+
+        def title_case_preserve_apostrophes(s):
+            return ' '.join(
+                word.capitalize() if "'" not in word else word
+                for word in s.lower().split()
+            )
+        text = title_case_preserve_apostrophes(text)
+
+        words = re.findall(r"\b[\w']+\b", text.lower())
+        corrected_words = []
+        for word in words:
+            if "'" in word:
+                corrected_words.append(word)
+            else:
+                corrected_words.append(typo_dict.get(word, word))
+        text = ' '.join(corrected_words)
+
+        text = re.sub(r"Children'S", "Children's", text, flags=re.IGNORECASE)
+        text = re.sub(r"Childrens", "Children's", text, flags=re.IGNORECASE)
+
+        corrections = {
+            'Childern': 'Children',
+            'Tavern': 'Restaurant',
+            'Grocery Store Store': 'Grocery Store',
+            'Assissted': 'Assisted',
+            'Restuarant': 'Restaurant',
+            'Commisary': 'Commissary',
+            'Hooka': 'Hookah',
+            'Parlor': 'Shop',
+            'Cart': 'Station',
+            'Liqour': 'Liquor',
+            "Children S Services Facility": "Children's Services Facility"
+        }
+
+        for wrong, right in corrections.items():
+            text = re.sub(rf'\b{wrong}\b', right, text, flags=re.IGNORECASE)
+
+        similar_terms = {
+            r'Hookah (Bar|Lounge)': 'Hookah Lounge',
+            r'Ice Cream (Parlor|Shop|Store)': 'Ice Cream Shop',
+            r'Hot Dog (Cart|Station)': 'Hot Dog Station',
+            r'Long[\s-]Term Care (Facility)?': 'Long Term Care',
+            r'Day ?Care': 'Day Care',
+            r'Banquet (Hall|Room|Facility)': 'Banquet Hall',
+            r'Gas ?Station': 'Gas Station',
+            r'Shared Kitchen': 'Shared Kitchen User',
+            r'Mobile (Food|Frozen)': 'Mobile Food'
+        }
+
+        for pattern, replacement in similar_terms.items():
+            if re.search(pattern, text, re.IGNORECASE):
+                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+                break
+
+        return text.title() if text != '' else np.nan
+
+    updated_food_dataset['Facility_Type_Clean'] = updated_food_dataset['Facility Type'].apply(preprocess_facility_type)
+
+    def consolidate_facility_types(series):
+        protected_terms = {
+            'School': 'School',
+            'Grocery Store': 'Grocery Store',
+            'Charter School': 'Charter School',
+            'Private School': 'Private School',
+            'Culinary School': 'Culinary School',
+            'Pastry School': 'Pastry School',
+            'Teaching School': 'Teaching School',
+            'Children\'s Services Facility': 'Children\'s Services Facility',
+            'Long Term Care': 'Long Term Care',
+            'Ice Cream Shop': 'Ice Cream Shop',
+            'Hookah Lounge': 'Hookah Lounge',
+            'Hot Dog Station': 'Hot Dog Station',
+            'Convenience Store': 'Convenience Store',
+            'Banquet Hall': 'Banquet Hall',
+            'After School Program': 'After School Program',
+            'Liquor': 'Liquor',
+            'Dollar Store': 'Dollar Store',
+            'Drug Store': 'Drug Store',
+            'Event Venue': 'Event Venue',
+            'Fitness Center': 'Fitness Center',
+            'Gas Station': 'Gas Station'
+        }
+
+        general_mappings = [
+            (r'Charter School.*', 'Charter School'),
+            (r'After School (Care|Program)', 'After School Program'),
+            (r'Before And After School Program', 'After School Program'),
+            (r'.*Culinary.*', 'Culinary School'),
+            (r'DAY\s?CARE\s?2-14', 'Day Care 2 Yrs To 14 Yrs'),
+            (r'DAY\s?CARE\s?6\s?WKS-5\s?YRS', 'Day Care 5 Weeks To 5 Yrs'),
+            (r'Day Care.*2.*6', 'Day Care (2 - 6 Years)'),
+            (r'Day Care.*Under 2', 'Day Care (Under 2 Years)'),
+            (r'Day Care.*Combo', 'Day Care Combo'),
+            (r'Convenient Store', 'Convenience Store'),
+            (r'Convenience(?! Store)', 'Convenience Store'),
+            (r'.*Dollar.*', 'Dollar Store'),
+            (r'.*Drug.*', 'Drug Store'),
+            (r'.*Event.*', 'Event Venue'),
+            (r'.*Fitness.*', 'Fitness Center'),
+            (r'Gas\s?[Ss]tation', 'Gas Station'),
+            (r'Gas Mini Mart', 'Gas Station'),
+            (r'(Banquet|Banquet Dining)', 'Banquet Hall'),
+            (r'TAVERN/RESTAURANT', 'Restaurant'),
+            (r'TAVERN/LIQUOR', 'Liquor'),
+            (r'Mobile.*Food.*Prepar', 'Mobile Prepared Food Vendor'),
+            (r'Mobile.*Food.*Dispens', 'Mobile Food Dispenser'),
+            (r'Long.*Term.*Care', 'Long Term Care'),
+            (r'Ice Cream.*', 'Ice Cream Shop'),
+            (r'Hookah.*', 'Hookah Lounge'),
+            (r'Hot Dog.*', 'Hot Dog Station'),
+            (r'Paleteria.*', 'Ice Cream Shop'),
+            (r'(?<!\S)School(?!\S)', 'School'),
+            (r'GROCERY/', '')
+        ]
+
+        def mapper(text):
+            if pd.isna(text):
+                return np.nan
+
+            original_text = str(text).strip()
+            text = re.sub(r'\b(II|III|IV)\b', lambda m: m.group(1).upper(), original_text)
+            text = re.sub(r'GROCERY/', '', text)
+
+            for term, replacement in protected_terms.items():
+                if text.lower() == term.lower():
+                    return replacement
+            for term, replacement in protected_terms.items():
+                if term.lower() in text.lower():
+                    return replacement
+            for pattern, replacement in general_mappings:
+                if re.search(pattern, text, re.IGNORECASE):
+                    return replacement
+            return original_text
+
+        return series.apply(mapper)
+
+    df_clean = updated_food_dataset.dropna(subset=['Facility_Type_Clean']).copy()
+    df_clean['Facility Type'] = consolidate_facility_types(df_clean['Facility_Type_Clean'])
+
+    return df_clean.drop(columns=['Facility_Type_Clean'])
+
+def clean_city_column(updated_food_dataset):
+
+    # Known valid city names
+    KNOWN_VALID_CITIES = {
+        'CHICAGO', 'OLYMPIA FIELDS', 'MERRILLVILLE', 'EVERGREEN',
+        'BEDFORD PARK', 'WADSWORTH', 'BANNOCKBURN DEERFIELD'
+    }
+
+    def clean_city_name(city):
+        city = str(city).upper().strip()
+        city = re.sub(r'[^A-Z\s]', '', city)
+        city = re.sub(r'\s+', ' ', city)
+        return city
+
+    def find_best_match(city, valid_cities):
+        city = clean_city_name(city)
+        if 'CHICAGO' in city or city.startswith('CH'):
+            chicago_match = process.extractOne('CHICAGO', [city], scorer=fuzz.token_set_ratio)
+            if chicago_match and chicago_match[1] > 90:
+                return 'CHICAGO'
+        if city in valid_cities:
+            return city
+        matches = [
+            process.extractOne(city, valid_cities, scorer=fuzz.ratio),
+            process.extractOne(city, valid_cities, scorer=fuzz.partial_ratio),
+            process.extractOne(city, valid_cities, scorer=fuzz.token_set_ratio)
+        ]
+        best_match = max(matches, key=lambda x: x[1])
+        if best_match and best_match[1] > 85:
+            return best_match[0]
+        return city
+
+    def detect_and_correct_city_typos(df, city_col='City'):
+        df_clean = df.copy()
+        df_clean[city_col] = df_clean[city_col].astype(str).apply(clean_city_name)
+        df_clean = df_clean[df_clean[city_col] != '']
+        df_clean[f'{city_col}_Cleaned'] = df_clean[city_col].apply(
+            lambda x: find_best_match(x, KNOWN_VALID_CITIES)
+        )
+
+        unique_cities = pd.DataFrame(df_clean[city_col].unique(), columns=[city_col])
+        vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 3), min_df=2)
+        X = vectorizer.fit_transform(unique_cities[city_col])
+
+        n_clusters = min(50, max(5, len(unique_cities) // 5))
+        kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+        clusters = kmeans.fit_predict(X)
+        unique_cities['Cluster'] = clusters
+
+        cluster_groups = unique_cities.groupby('Cluster')[city_col].apply(list).to_dict()
+        typo_candidates = defaultdict(list)
+
+        for cluster, cities in cluster_groups.items():
+            if len(cities) < 2:
+                continue
+            valid_in_cluster = [c for c in cities if c in KNOWN_VALID_CITIES]
+            if valid_in_cluster:
+                base_city = max(valid_in_cluster, key=lambda x: len(x))
+            else:
+                similarity_scores = []
+                for city in cities:
+                    match = find_best_match(city, KNOWN_VALID_CITIES)
+                    if match != city:
+                        similarity_scores.append((city, match, fuzz.token_set_ratio(city, match)))
+                if similarity_scores:
+                    base_city = max(similarity_scores, key=lambda x: x[2])[1]
+                else:
+                    continue
+            for city in cities:
+                if city == base_city:
+                    continue
+                similarity = fuzz.token_set_ratio(city, base_city)
+                if similarity > 85:
+                    typo_candidates[base_city].append((city, similarity))
+
+        final_corrections = {}
+        for correct, typos in typo_candidates.items():
+            for typo, similarity in typos:
+                if similarity > 85:
+                    final_corrections[typo] = correct
+
+        df_clean[f'{city_col}_Cleaned'] = df_clean[f'{city_col}_Cleaned'].replace(final_corrections)
+        return df_clean
+
+    # --- Apply the cleaning to the input dataset ---
+    result_df = detect_and_correct_city_typos(updated_food_dataset, city_col='City')
+    updated_food_dataset['City'] = result_df['City_Cleaned']
+    return updated_food_dataset
 
 
 def parse_comments(text):
@@ -1239,6 +1517,8 @@ if __name__ == '__main__':
     updated_food_dataset = standardize_name_columns(updated_food_dataset)
     updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updated_food_dataset['dba_name'])
     updated_food_dataset = fix_city_name(updated_food_dataset)
+    updated_food_dataset = clean_facility_type_column(updated_food_dataset)
+    updated_food_dataset = clean_city_column(updated_food_dataset)
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
@@ -1253,7 +1533,6 @@ if __name__ == '__main__':
     check_city_state_spelling(updated_food_dataset)
     profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
-    
     
     ##### INGESTING TO SQL DATABASE #####
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
