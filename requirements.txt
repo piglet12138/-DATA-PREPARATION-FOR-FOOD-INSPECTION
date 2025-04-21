@@ -1,0 +1,9 @@
+pandas
+numpy
+fuzzywuzzy
+python-levenshtein
+requests
+zipcodes
+missingno
+matplotlib
+seaborn
