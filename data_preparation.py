@@ -2635,10 +2635,6 @@ if __name__ == '__main__':
     updated_food_dataset = standardize_name_columns(updated_food_dataset)
     updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updated_food_dataset['dba_name'])
     updated_food_dataset = fix_city_name(updated_food_dataset)
-
-    updated_food_dataset = clean_facility_type_column(updated_food_dataset)
-    updated_food_dataset = clean_city_column(updated_food_dataset)
-
     fds_to_fix = [#derived from AFD, obmitted in this script
         "dba_name → facility_type",
         "address → zip",
@@ -2649,6 +2645,8 @@ if __name__ == '__main__':
     ]
     updated_food_dataset, stats = repair_dataset_based_on_fd(updated_food_dataset, fds_to_fix)
 
+    updated_food_dataset = clean_facility_type_column(updated_food_dataset)
+    updated_food_dataset = clean_city_column(updated_food_dataset)
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
