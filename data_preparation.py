@@ -182,6 +182,7 @@ def verify_violations_structure(df, structure=r"^\s*\d+\.\s+.+?(\s+-\s+Comments:
     """
     Verify that all values in the 'violations' column follow the structure:
     "Code. Category - Comments: Comment text" with parts separated by "|"
+    the Comments part is optional.
     
     Parameters:
     df (DataFrame): DataFrame containing 'violations' column
