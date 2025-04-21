@@ -38,13 +38,14 @@ These tables are then stored in a SQLite database called `food_inspections.db`
     ```bash
     pip install -r requirements.txt
     ```
-2. Place the input CSV file (`Food_Inspections_20250216.csv`) in the working directory
-3. Make sure the `data_preparation.py` module is available in your path
-4. Execute the script in the command line 
+2. For the storage part, be sure to have SQLite installed on your machine. Download link: https://www.sqlite.org/download.html, or follow this tutorial: https://www.tutorialspoint.com/sqlite/sqlite_installation.htm
+3. Place the input CSV file (`Food_Inspections_20250216.csv`) in the working directory
+4. Make sure the `data_preparation.py` module is available in your path
+5. Execute the script in the command line 
     ```bash
     python data_preparation.py
     ```
-5. Review the profiling results to understand data quality
-6. Access the normalized data in the SQLite database
+6. Review the profiling results to understand data quality
+7. Access the normalized data in the SQLite database
 
 The final database structure follows a star schema design that allows for efficient querying across inspection records, facilities, and violations.
