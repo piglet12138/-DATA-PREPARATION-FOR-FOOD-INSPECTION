@@ -636,9 +636,9 @@ def verify_violations_structure(df, structure=r"^\s*\d+\.\s+.+?(\s+-\s+Comments:
 
 
 
-def profile_violations(violations_df):
+def profile_violations_normalized(violations_df):
     '''
-    Function to profile the violations data.
+    Function to profile the violations data after it has been normalized.
     '''
     # Get counts of each code_category and sort
     violations_df['code_category'] = violations_df['violation_code'].astype('str') + '-' + violations_df['category'].str[:40]
@@ -1915,12 +1915,7 @@ if __name__ == '__main__':
     verify_violations_structure(updated_food_dataset)
     
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
-    profile_violations(violations_df)
-    result = association_rule_mining(
-        updated_food_dataset,
-        categorical_columns=['facility_type', 'risk', 'results', 'inspection_type'],
-        violation_column='violations'
-    )
+    profile_violations_normalized(violations_df)
     
     ##### INGESTING TO SQL DATABASE #####
     facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
