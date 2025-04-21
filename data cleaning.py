@@ -406,7 +406,7 @@ updated_food_dataset = food_dataset.copy()
 # Apply function
 updated_food_dataset = col_name_changer(updated_food_dataset)
 updated_food_dataset = process_license_numbers(updated_food_dataset)
-updated_food_dataset = clean_zip_data(updated_food_dataset).drop(columns=['zip'],axis=1).rename(columns={'zip_clean':'zip'})
+updated_food_dataset = clean_zip_data(updated_food_dataset).drop(columns=['zip','zip_valid'],axis=1).rename(columns={'zip_clean':'zip'})
 updated_food_dataset['state'] = updated_food_dataset.apply(
     lambda row: row['state'] if pd.notna(row['state']) else get_zip_info(row['zip'],'state'),
     axis=1)
