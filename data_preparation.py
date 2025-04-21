@@ -623,7 +623,33 @@ def verify_violations_structure(df, structure=r"^\s*\d+\.\s+.+?(\s+-\s+Comments:
 
 
 
+def profile_violations(violations_df):
+    '''
+    Function to profile the violations data.
+    '''
+    # Get counts of each code_category and sort
+    violations_df['code_category'] = violations_df['violation_code'].astype('str') + '-' + violations_df['category'].str[:40]
+    code_category_counts = violations_df['code_category'].value_counts().reset_index()
+    code_category_counts.columns = ['code_category', 'count']
+    code_category_counts = code_category_counts.head(20)  # Top 20
 
+    # Create figure with larger size for readability
+    plt.figure(figsize=(14, 10))
+
+    # Create horizontal bar chart
+    sns.barplot(x='count', y='code_category', data=code_category_counts, palette='viridis')
+
+    # Add title and labels
+    plt.title('Top 20 Most Common Violation Code-Categories', fontsize=16)
+    plt.xlabel('Count', fontsize=12)
+    plt.ylabel('Violation Code-Category', fontsize=12)
+    plt.tight_layout()
+
+    # Add count values at the end of each bar
+    for i, v in enumerate(code_category_counts['count']):
+        plt.text(v + 0.1, i, f"{v:,}", va='center')
+
+    plt.show()
 
 
 ##### DATA PROCESSING ######
@@ -1254,9 +1280,10 @@ if __name__ == '__main__':
     profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
     
+    violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
+    profile_violations(violations_df)
     
     ##### INGESTING TO SQL DATABASE #####
-    violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
     facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
     
     # Save tables to SQLite database
