@@ -11,9 +11,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+
 import networkx as nx
 import time
 from collections import defaultdict
@@ -22,12 +20,7 @@ import sys
 from tqdm import tqdm
 from tane import TANE, PPattern, read_db, tostr
 tane_imported = True
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import networkx as nx
-import time
-from collections import defaultdict
+
 
 
 
