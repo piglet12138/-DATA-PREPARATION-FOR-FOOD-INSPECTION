@@ -401,6 +401,70 @@ def fix_city_name(df, city_col='city', threshold=85):
     return df
 
 
+
+def parse_comments(text):
+    """
+    Parse the comments from the 'Violations' column.
+    Each comment is expected to be in the format:
+    "Code. Category - Comments: Comment text"
+    The function returns a list of dictionaries with keys:
+    'violation_code', 'category', and 'comment'.
+    """
+    parts = [part.strip() for part in text.split('|') if part.strip()]
+    rows = []
+
+    for part in parts:
+        match = re.match(r"(?P<code>\d+)\.\s+(?P<category>.+?)\s+-\s+Comments:\s*(?P<comment>.+)", part)
+        if match:
+            rows.append({
+                'violation_code': int(match.group('code')),
+                'category': match.group('category').strip(),
+                'comment': match.group('comment').strip()
+            })
+    return rows
+
+def parse_violations(df):
+    '''
+    Parse the 'Violations' column in the dataframe.
+    Each entry in the 'Violations' column is expected to contain multiple violations
+    separated by '|'. Each violation is in the format:
+    "Code. Category - Comments: Comment text"
+    The function returns a new dataframe with the following columns:
+    - Inspection ID
+    - Violation Code
+    - Category
+    - Comment
+
+    Example usage:
+    normalized_violations = parse_violations(df)
+    '''
+    # Fill NA values with empty string to avoid errors
+    df['Violations'] = df['Violations'].fillna('')
+    
+    # Parse each violation entry
+    parsed_rows = df['Violations'].apply(parse_comments)
+    
+    # Create a new dataframe with the parsed data
+    violations_df = pd.DataFrame({
+        'Inspection ID': df['Inspection ID'].repeat(parsed_rows.apply(len)),
+        # 'DBA Name': df['DBA Name'].repeat(parsed_rows.apply(len)),
+        # 'Inspection Date': df['Inspection Date'].repeat(parsed_rows.apply(len)),
+        # 'Inspection Type': df['Inspection Type'].repeat(parsed_rows.apply(len)),
+        # 'Results': df['Results'].repeat(parsed_rows.apply(len))
+    })
+    
+    # Extract the parsed data into separate columns
+    violations_data = [item for sublist in parsed_rows for item in sublist]
+    
+    # Create a dataframe from the parsed violations
+    violations_details = pd.DataFrame(violations_data)
+    
+    # Combine the inspection info with violation details
+    result_df = pd.concat([violations_df.reset_index(drop=True), 
+                          violations_details.reset_index(drop=True)], axis=1)
+    
+    return result_df
+
 food_dataset = pd.read_csv("Food_Inspections_20250216.csv")
 updated_food_dataset = food_dataset.copy()
 # Apply function
@@ -420,3 +484,5 @@ updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updat
 updated_food_dataset = fix_city_name(updated_food_dataset)
 updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
+
+normalized_violations = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
