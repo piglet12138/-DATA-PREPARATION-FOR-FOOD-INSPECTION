@@ -10,6 +10,8 @@ from difflib import get_close_matches, SequenceMatcher
 from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
+from collections import Counter, defaultdict
+from string import capwords
 
 
 import networkx as nx
@@ -1146,6 +1148,155 @@ def association_rule_mining(dataset, categorical_columns=None, violation_column=
     return results
 
 
+def repair_dataset_based_on_fd(df, fds_to_fix):
+    """
+    Repair missing values in dataset based on functional dependencies (FD)
+
+    Parameters:
+        df: pandas DataFrame, dataset to be repaired
+        fds_to_fix: list, functional dependencies to repair, format "X → Y"
+
+    Returns:
+        repaired_df: pandas DataFrame, repaired dataset
+        repair_stats: dict, repair statistics
+    """
+
+    print("Starting data repair based on functional dependencies...")
+
+    # Initialize repair suggestions list and statistics
+    repair_suggestions = []
+    repair_stats = {
+        "total_fds": len(fds_to_fix),
+        "repairs_applied": 0,
+        "repairs_skipped": 0,
+        "rows_affected": 0,
+        "fd_details": {}
+    }
+
+    # Process each specified functional dependency
+    for fd_string in fds_to_fix:
+        parts = fd_string.split('→')
+        if len(parts) != 2:
+            print(f"  Warning: Invalid FD format {fd_string}, skipping")
+            continue
+
+        x_attr = parts[0].strip()
+        y_attr = parts[1].strip()
+
+        print(f"\nAnalyzing functional dependency: {x_attr} → {y_attr}")
+
+        # Handle compound attributes (e.g., "dba_name,risk")
+        x_attrs = [x.strip() for x in x_attr.replace('"', '').split(',')]
+
+        # Check if these columns exist
+        if not all(attr in df.columns for attr in x_attrs) or y_attr not in df.columns:
+            print(f"  Warning: Some attributes missing in dataset, skipping")
+            continue
+
+        # Find rows that violate the functional dependency
+        violations = defaultdict(list)
+        groups = df.groupby(x_attrs)
+
+        for name, group in groups:
+            # If one X value corresponds to multiple Y values, there's a violation
+            unique_y_values = group[y_attr].dropna().unique()
+            if len(unique_y_values) > 1:
+                key = tuple(name) if isinstance(name, tuple) else (name,)
+                # Store all non-nan y values for this X
+                violations[key] = unique_y_values.tolist()
+            elif len(unique_y_values) == 1 and group[y_attr].isna().any():
+                # Has null values and one unique non-null value - can be repaired
+                key = tuple(name) if isinstance(name, tuple) else (name,)
+                violations[key] = unique_y_values.tolist()
+
+        # Generate repair suggestions for each violation
+        fd_repairs = 0
+        for x_value, y_values in violations.items():
+            if y_values:  # Ensure we have non-NaN values
+                most_common_y = max(set(y_values), key=y_values.count)
+                repair_suggestions.append({
+                    'fd': fd_string,
+                    'x_value': x_value,
+                    'current_y_values': y_values,
+                    'suggested_y': most_common_y
+                })
+                fd_repairs += 1
+
+        repair_stats["fd_details"][fd_string] = fd_repairs
+        print(f"  Found {fd_repairs} potential repairs")
+
+    # Generate repaired dataset
+    repaired_df = df.copy()
+
+    if repair_suggestions:
+        print("\nCreating repaired dataset...")
+        repairs_applied = 0
+        skipped_repairs = 0
+        total_rows_affected = 0
+
+        for suggestion in repair_suggestions:
+            fd = suggestion['fd']
+            x_value = suggestion['x_value']
+            suggested_y = suggestion['suggested_y']
+
+            x_attrs = [x.strip() for x in fd.split('→')[0].replace('"', '').split(',')]
+            y_attr = fd.split('→')[1].strip()
+
+            # Skip if suggested value is NaN
+            if pd.isna(suggested_y):
+                print(f"  Skipped: {fd} X={x_value} - no non-null value suggestion available")
+                skipped_repairs += 1
+                continue
+
+            # Check for license_number rule
+            skip_due_to_license_rule = False
+            for i, attr in enumerate(x_attrs):
+                if attr == 'license_num':
+                    # For single attribute case
+                    if not isinstance(x_value, tuple) and (x_value == 0 or x_value == 0.0):
+                        print(f"  Skipped: {fd} license_num={x_value} - zero license numbers excluded from repairs")
+                        skip_due_to_license_rule = True
+                        break
+                    # For compound attributes case
+                    elif isinstance(x_value, tuple) and (x_value[i] == 0 or x_value[i] == 0.0):
+                        print(f"  Skipped: {fd} license_num={x_value[i]} - zero license numbers excluded from repairs")
+                        skip_due_to_license_rule = True
+                        break
+
+            if skip_due_to_license_rule:
+                skipped_repairs += 1
+                continue
+
+            # Create filter condition
+            filter_condition = True
+            for i, attr in enumerate(x_attrs):
+                if len(x_attrs) > 1:
+                    filter_condition = filter_condition & (repaired_df[attr] == x_value[i])
+                else:
+                    filter_condition = filter_condition & (repaired_df[attr] == x_value)
+
+            # Only fix NaN values in Y
+            filter_condition = filter_condition & repaired_df[y_attr].isna()
+
+            # Apply fix
+            rows_affected = sum(filter_condition)
+            if rows_affected > 0:
+                repaired_df.loc[filter_condition, y_attr] = suggested_y
+                repairs_applied += 1
+                total_rows_affected += rows_affected
+                print(f"  Fixed: {fd} X={x_value}, set NaN values to {suggested_y} (affected {rows_affected} rows)")
+            else:
+                print(f"  No repair needed: {fd} X={x_value} - no matching NaN values")
+
+        repair_stats["repairs_applied"] = repairs_applied
+        repair_stats["repairs_skipped"] = skipped_repairs
+        repair_stats["rows_affected"] = total_rows_affected
+        print(
+            f"\nRepair complete: Applied {repairs_applied} repairs (skipped {skipped_repairs}), affected {total_rows_affected} rows")
+    else:
+        print("\nNo violations to fix for the specified FDs")
+
+    return repaired_df, repair_stats
 
 ##### DATA PROCESSING ######
 """
@@ -1597,6 +1748,282 @@ def fix_city_name(df, city_col='city', threshold=85):
     
     return df
 
+def clean_facility_type_column(updated_food_dataset):
+
+    def detect_typos(text_series, min_word_length=4, min_count=10, similarity_threshold=90):
+        words = []
+        for text in text_series.dropna():
+            extracted = [w.lower() for w in re.findall(r"\b[\w']+\b", str(text)) 
+                         if len(w) >= min_word_length and not w.isdigit()]
+            words.extend(extracted)
+        
+        word_counts = Counter(words)
+        common_words = {word for word, count in word_counts.items() if count >= min_count}
+        
+        common_typos = {
+            'childern': 'children',
+            'assissted': 'assisted',
+            'restuarant': 'restaurant',
+            'commisary': 'commissary',
+            'convnience': 'convenience',
+            'liquore': 'liquor',
+            'facilty': 'facility',
+            'nutriton': 'nutrition',
+            'herbalcal': 'herbalife',
+            'cafetaria': 'cafeteria',
+            'poulty': 'poultry',
+            'hooka': 'hookah'
+        }
+        
+        potential_typos = {}
+        for word in word_counts:
+            if word not in common_typos and word not in common_words:
+                matches = process.extract(word, common_words, limit=1)
+                if matches and matches[0][1] >= similarity_threshold:
+                    if word[0] == matches[0][0][0]:
+                        potential_typos[word] = matches[0][0]
+        
+        return {**common_typos, **potential_typos}
+
+    typo_dict = detect_typos(updated_food_dataset['Facility Type'])
+
+    def preprocess_facility_type(text):
+        if pd.isna(text):
+            return np.nan
+
+        text = str(text).strip()
+        text = re.sub(r'\b\d{4}\b', '', text).strip()
+        if text.startswith('(') and text.endswith(')'):
+            text = text[1:-1].strip()
+
+        def title_case_preserve_apostrophes(s):
+            return ' '.join(
+                word.capitalize() if "'" not in word else word
+                for word in s.lower().split()
+            )
+        text = title_case_preserve_apostrophes(text)
+
+        words = re.findall(r"\b[\w']+\b", text.lower())
+        corrected_words = []
+        for word in words:
+            if "'" in word:
+                corrected_words.append(word)
+            else:
+                corrected_words.append(typo_dict.get(word, word))
+        text = ' '.join(corrected_words)
+
+        text = re.sub(r"Children'S", "Children's", text, flags=re.IGNORECASE)
+        text = re.sub(r"Childrens", "Children's", text, flags=re.IGNORECASE)
+
+        corrections = {
+            'Childern': 'Children',
+            'Tavern': 'Restaurant',
+            'Grocery Store Store': 'Grocery Store',
+            'Assissted': 'Assisted',
+            'Restuarant': 'Restaurant',
+            'Commisary': 'Commissary',
+            'Hooka': 'Hookah',
+            'Parlor': 'Shop',
+            'Cart': 'Station',
+            'Liqour': 'Liquor',
+            "Children S Services Facility": "Children's Services Facility"
+        }
+
+        for wrong, right in corrections.items():
+            text = re.sub(rf'\b{wrong}\b', right, text, flags=re.IGNORECASE)
+
+        similar_terms = {
+            r'Hookah (Bar|Lounge)': 'Hookah Lounge',
+            r'Ice Cream (Parlor|Shop|Store)': 'Ice Cream Shop',
+            r'Hot Dog (Cart|Station)': 'Hot Dog Station',
+            r'Long[\s-]Term Care (Facility)?': 'Long Term Care',
+            r'Day ?Care': 'Day Care',
+            r'Banquet (Hall|Room|Facility)': 'Banquet Hall',
+            r'Gas ?Station': 'Gas Station',
+            r'Shared Kitchen': 'Shared Kitchen User',
+            r'Mobile (Food|Frozen)': 'Mobile Food'
+        }
+
+        for pattern, replacement in similar_terms.items():
+            if re.search(pattern, text, re.IGNORECASE):
+                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+                break
+
+        return text.title() if text != '' else np.nan
+
+    updated_food_dataset['Facility_Type_Clean'] = updated_food_dataset['Facility Type'].apply(preprocess_facility_type)
+
+    def consolidate_facility_types(series):
+        protected_terms = {
+            'School': 'School',
+            'Grocery Store': 'Grocery Store',
+            'Charter School': 'Charter School',
+            'Private School': 'Private School',
+            'Culinary School': 'Culinary School',
+            'Pastry School': 'Pastry School',
+            'Teaching School': 'Teaching School',
+            'Children\'s Services Facility': 'Children\'s Services Facility',
+            'Long Term Care': 'Long Term Care',
+            'Ice Cream Shop': 'Ice Cream Shop',
+            'Hookah Lounge': 'Hookah Lounge',
+            'Hot Dog Station': 'Hot Dog Station',
+            'Convenience Store': 'Convenience Store',
+            'Banquet Hall': 'Banquet Hall',
+            'After School Program': 'After School Program',
+            'Liquor': 'Liquor',
+            'Dollar Store': 'Dollar Store',
+            'Drug Store': 'Drug Store',
+            'Event Venue': 'Event Venue',
+            'Fitness Center': 'Fitness Center',
+            'Gas Station': 'Gas Station'
+        }
+
+        general_mappings = [
+            (r'Charter School.*', 'Charter School'),
+            (r'After School (Care|Program)', 'After School Program'),
+            (r'Before And After School Program', 'After School Program'),
+            (r'.*Culinary.*', 'Culinary School'),
+            (r'DAY\s?CARE\s?2-14', 'Day Care 2 Yrs To 14 Yrs'),
+            (r'DAY\s?CARE\s?6\s?WKS-5\s?YRS', 'Day Care 5 Weeks To 5 Yrs'),
+            (r'Day Care.*2.*6', 'Day Care (2 - 6 Years)'),
+            (r'Day Care.*Under 2', 'Day Care (Under 2 Years)'),
+            (r'Day Care.*Combo', 'Day Care Combo'),
+            (r'Convenient Store', 'Convenience Store'),
+            (r'Convenience(?! Store)', 'Convenience Store'),
+            (r'.*Dollar.*', 'Dollar Store'),
+            (r'.*Drug.*', 'Drug Store'),
+            (r'.*Event.*', 'Event Venue'),
+            (r'.*Fitness.*', 'Fitness Center'),
+            (r'Gas\s?[Ss]tation', 'Gas Station'),
+            (r'Gas Mini Mart', 'Gas Station'),
+            (r'(Banquet|Banquet Dining)', 'Banquet Hall'),
+            (r'TAVERN/RESTAURANT', 'Restaurant'),
+            (r'TAVERN/LIQUOR', 'Liquor'),
+            (r'Mobile.*Food.*Prepar', 'Mobile Prepared Food Vendor'),
+            (r'Mobile.*Food.*Dispens', 'Mobile Food Dispenser'),
+            (r'Long.*Term.*Care', 'Long Term Care'),
+            (r'Ice Cream.*', 'Ice Cream Shop'),
+            (r'Hookah.*', 'Hookah Lounge'),
+            (r'Hot Dog.*', 'Hot Dog Station'),
+            (r'Paleteria.*', 'Ice Cream Shop'),
+            (r'(?<!\S)School(?!\S)', 'School'),
+            (r'GROCERY/', '')
+        ]
+
+        def mapper(text):
+            if pd.isna(text):
+                return np.nan
+
+            original_text = str(text).strip()
+            text = re.sub(r'\b(II|III|IV)\b', lambda m: m.group(1).upper(), original_text)
+            text = re.sub(r'GROCERY/', '', text)
+
+            for term, replacement in protected_terms.items():
+                if text.lower() == term.lower():
+                    return replacement
+            for term, replacement in protected_terms.items():
+                if term.lower() in text.lower():
+                    return replacement
+            for pattern, replacement in general_mappings:
+                if re.search(pattern, text, re.IGNORECASE):
+                    return replacement
+            return original_text
+
+        return series.apply(mapper)
+
+    df_clean = updated_food_dataset.dropna(subset=['Facility_Type_Clean']).copy()
+    df_clean['Facility Type'] = consolidate_facility_types(df_clean['Facility_Type_Clean'])
+
+    return df_clean.drop(columns=['Facility_Type_Clean'])
+
+def clean_city_column(updated_food_dataset):
+
+    # Known valid city names
+    KNOWN_VALID_CITIES = {
+        'CHICAGO', 'OLYMPIA FIELDS', 'MERRILLVILLE', 'EVERGREEN',
+        'BEDFORD PARK', 'WADSWORTH', 'BANNOCKBURN DEERFIELD'
+    }
+
+    def clean_city_name(city):
+        city = str(city).upper().strip()
+        city = re.sub(r'[^A-Z\s]', '', city)
+        city = re.sub(r'\s+', ' ', city)
+        return city
+
+    def find_best_match(city, valid_cities):
+        city = clean_city_name(city)
+        if 'CHICAGO' in city or city.startswith('CH'):
+            chicago_match = process.extractOne('CHICAGO', [city], scorer=fuzz.token_set_ratio)
+            if chicago_match and chicago_match[1] > 90:
+                return 'CHICAGO'
+        if city in valid_cities:
+            return city
+        matches = [
+            process.extractOne(city, valid_cities, scorer=fuzz.ratio),
+            process.extractOne(city, valid_cities, scorer=fuzz.partial_ratio),
+            process.extractOne(city, valid_cities, scorer=fuzz.token_set_ratio)
+        ]
+        best_match = max(matches, key=lambda x: x[1])
+        if best_match and best_match[1] > 85:
+            return best_match[0]
+        return city
+
+    def detect_and_correct_city_typos(df, city_col='City'):
+        df_clean = df.copy()
+        df_clean[city_col] = df_clean[city_col].astype(str).apply(clean_city_name)
+        df_clean = df_clean[df_clean[city_col] != '']
+        df_clean[f'{city_col}_Cleaned'] = df_clean[city_col].apply(
+            lambda x: find_best_match(x, KNOWN_VALID_CITIES)
+        )
+
+        unique_cities = pd.DataFrame(df_clean[city_col].unique(), columns=[city_col])
+        vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 3), min_df=2)
+        X = vectorizer.fit_transform(unique_cities[city_col])
+
+        n_clusters = min(50, max(5, len(unique_cities) // 5))
+        kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+        clusters = kmeans.fit_predict(X)
+        unique_cities['Cluster'] = clusters
+
+        cluster_groups = unique_cities.groupby('Cluster')[city_col].apply(list).to_dict()
+        typo_candidates = defaultdict(list)
+
+        for cluster, cities in cluster_groups.items():
+            if len(cities) < 2:
+                continue
+            valid_in_cluster = [c for c in cities if c in KNOWN_VALID_CITIES]
+            if valid_in_cluster:
+                base_city = max(valid_in_cluster, key=lambda x: len(x))
+            else:
+                similarity_scores = []
+                for city in cities:
+                    match = find_best_match(city, KNOWN_VALID_CITIES)
+                    if match != city:
+                        similarity_scores.append((city, match, fuzz.token_set_ratio(city, match)))
+                if similarity_scores:
+                    base_city = max(similarity_scores, key=lambda x: x[2])[1]
+                else:
+                    continue
+            for city in cities:
+                if city == base_city:
+                    continue
+                similarity = fuzz.token_set_ratio(city, base_city)
+                if similarity > 85:
+                    typo_candidates[base_city].append((city, similarity))
+
+        final_corrections = {}
+        for correct, typos in typo_candidates.items():
+            for typo, similarity in typos:
+                if similarity > 85:
+                    final_corrections[typo] = correct
+
+        df_clean[f'{city_col}_Cleaned'] = df_clean[f'{city_col}_Cleaned'].replace(final_corrections)
+        return df_clean
+
+    # --- Apply the cleaning to the input dataset ---
+    result_df = detect_and_correct_city_typos(updated_food_dataset, city_col='City')
+    updated_food_dataset['City'] = result_df['City_Cleaned']
+    return updated_food_dataset
 
 
 def parse_comments(text):
@@ -2125,6 +2552,20 @@ if __name__ == '__main__':
     updated_food_dataset = standardize_name_columns(updated_food_dataset)
     updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updated_food_dataset['dba_name'])
     updated_food_dataset = fix_city_name(updated_food_dataset)
+
+    updated_food_dataset = clean_facility_type_column(updated_food_dataset)
+    updated_food_dataset = clean_city_column(updated_food_dataset)
+
+    fds_to_fix = [#derived from AFD, obmitted in this script
+        "dba_name → facility_type",
+        "address → zip",
+        "location → zip",
+        "address → city",
+        "address,inspection_date → facility_type",
+        "aka_name,inspection_date → location"
+    ]
+    updated_food_dataset, stats = repair_dataset_based_on_fd(updated_food_dataset, fds_to_fix)
+
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
@@ -2156,7 +2597,10 @@ if __name__ == '__main__':
     check_city_state_spelling(updated_food_dataset)
     profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
-    
+
+    ##### INGESTING TO SQL DATABASE #####
+
+
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
     profile_violations_normalized(violations_df)
     
