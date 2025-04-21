@@ -1247,6 +1247,12 @@ if __name__ == '__main__':
     profile_inspection_date(updated_food_dataset)
     profile_inspection_type(updated_food_dataset)
     profile_results(updated_food_dataset)
+    profiling_zip(updated_food_dataset)
+    profiling_state(updated_food_dataset)
+    check_zip_state_city_mapping(updated_food_dataset)
+    check_city_state_spelling(updated_food_dataset)
+    analyze_violations_structure(updated_food_dataset, sample_size=1000)
+    verify_violations_structure(updated_food_dataset)
     
     
     ##### INGESTING TO SQL DATABASE #####
