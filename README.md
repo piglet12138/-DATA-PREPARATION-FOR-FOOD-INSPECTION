@@ -40,7 +40,7 @@ These tables are then stored in a SQLite database called `food_inspections.db`
     ```
 2. For the storage part, be sure to have SQLite installed on your machine. Download link: https://www.sqlite.org/download.html, or follow this tutorial: https://www.tutorialspoint.com/sqlite/sqlite_installation.htm
 3. Place the input CSV file (`Food_Inspections_20250216.csv`) in the working directory
-4. Make sure the `data_preparation.py` module is available in your path
+4. Make sure the `data_preparation.py` and `tane.py` module is available in your path
 5. Execute the script in the command line 
     ```bash
     python data_preparation.py
