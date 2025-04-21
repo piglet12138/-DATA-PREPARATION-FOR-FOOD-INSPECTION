@@ -19,6 +19,7 @@ from itertools import combinations
 import sys
 from tqdm import tqdm
 from tane import TANE, PPattern, read_db, tostr
+from mlxtend.frequent_patterns import apriori, association_rules
 tane_imported = True
 
 
@@ -663,6 +664,7 @@ def profile_violations_normalized(violations_df):
         plt.text(v + 0.1, i, f"{v:,}", va='center')
 
     plt.show()
+
 
 
 def extract_violation_codes(text):
@@ -1917,8 +1919,11 @@ if __name__ == '__main__':
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
     profile_violations_normalized(violations_df)
     
-    ##### INGESTING TO SQL DATABASE #####
-    facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
+    result = association_rule_mining(
+        updated_food_dataset,
+        categorical_columns=['facility_type', 'risk', 'results', 'inspection_type'],
+        violation_column='violations'
+    )
     
     # Save tables to SQLite database
     df_to_sqlite(violations_df, 'food_inspections.db', 'violations', if_exists='replace', index=False)
