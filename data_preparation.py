@@ -1625,10 +1625,10 @@ if __name__ == '__main__':
     #TANE set up
     columns_to_exclude = ['violations']
     # Select subset of columns to speed up algorithm
-    df_analysis = df.drop(columns=columns_to_exclude)
-    df_analysis = df_analysis.dropna()
-    float_cols = df.select_dtypes(include=["float64"]).columns
-    df[float_cols] = df[float_cols].astype(str)
+    df_analysis = updated_food_dataset.drop(columns=columns_to_exclude)
+    df_analysis = updated_food_dataset.dropna()
+    float_cols = updated_food_dataset.select_dtypes(include=["float64"]).columns
+    updated_food_dataset[float_cols] = updated_food_dataset[float_cols].astype(str)
 
     #TANE
     print("Running TANE via direct module import...")
@@ -1649,17 +1649,17 @@ if __name__ == '__main__':
     else:
         print("No functional dependencies discovered or unable to parse results.")
 
-  #IND
-  columns_to_exclude = ['Violations' ]
-  columns_to_include = ['Inspection ID', 'DBA Name', 'AKA Name', 'License #',
+    #IND
+    columns_to_exclude = ['Violations' ]
+    columns_to_include = ['Inspection ID', 'DBA Name', 'AKA Name', 'License #',
                         'Facility Type', 'Risk', 'City', 'State', 'Zip',
                         'Inspection Type', 'Results','Location']
-  df_analysis = df.drop(columns=columns_to_exclude)[columns_to_include]
-  df_analysis = df_analysis.fillna('__NULL__')
+    df_analysis = updated_food_dataset.drop(columns=columns_to_exclude)[columns_to_include]
+    df_analysis = df_analysis.fillna('__NULL__')
 
-  inclusion_deps = find_inclusion_dependencies(df_analysis, min_confidence=0.95)
+    inclusion_deps = find_inclusion_dependencies(df_analysis, min_confidence=0.95)
   
-  if inclusion_deps:
-      print("\nSome inclusion dependencies discovered:")
-      for dep in sorted(inclusion_deps, key=lambda x: x[2], reverse=True)[:10]:
-          print(f"{dep[0]} ⊆ {dep[1]} (confidence: {dep[2]:.4f})")
+    if inclusion_deps:
+        print("\nSome inclusion dependencies discovered:")
+        for dep in sorted(inclusion_deps, key=lambda x: x[2], reverse=True)[:10]:
+            print(f"{dep[0]} ⊆ {dep[1]} (confidence: {dep[2]:.4f})")
