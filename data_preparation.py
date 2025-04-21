@@ -13,7 +13,7 @@ import seaborn as sns
 
 ##### DATA PROFILING #####
 
-def check_name_similarity(df, dba_col='dba_name', aka_col='aka_name', 
+def profile_name(df, dba_col='dba_name', aka_col='aka_name', 
                         similarity_threshold=0.8, fill_missing=True):
     """
     Analyzes similarity between two name columns and optionally fills missing values.
@@ -376,14 +376,14 @@ def profile_results(df):
         print(f"• {result:<20}: {result_counts[result]:>8,} ({result_pct[result]}%)")
     print("="*40)
     
-def profiling_zip(df):
+def profile_zip(df):
     '''
     Function to profile ZIP codes in the dataset.
     Args:
         df: DataFrame containing ZIP codes
         
     Example usage:
-    profiling_zip(updated_food_dataset)
+    profile_zip(updated_food_dataset)
     '''
     
     # show most frequent zip codes
@@ -398,14 +398,14 @@ def profiling_zip(df):
     sns.countplot(data=consistent_zip_length, x='zip_length')
     plt.title("ZIP Code Length Distribution")
     
-def profiling_state(df):
+def profile_state(df):
     '''
     Function to profile states in the dataset.
     Args:
         df: DataFrame containing state data
         
     Example usage:
-    profiling_state(updated_food_dataset)
+    profile_state(updated_food_dataset)
     '''
     
         
@@ -471,7 +471,7 @@ def check_city_state_spelling(df, sample_size=5):
             print(f"Potential duplicates for '{state}': {matches}")
             
 
-def analyze_violations_structure(df, sample_size=100):
+def profile_violations(df, sample_size=100):
     """
     Analyze the structure of the 'violations' column in the dataframe.
     
@@ -482,7 +482,7 @@ def analyze_violations_structure(df, sample_size=100):
     dict: Analysis results including patterns found, separator counts, etc.
     
     Example usage: 
-    analyze_violations_structure(updated_food_dataset, sample_size=1000)
+    profile_violations(updated_food_dataset, sample_size=1000)
     """
     # Get sample of non-empty violations
     df['violations'] = df['violations'].fillna('')
@@ -1242,16 +1242,16 @@ if __name__ == '__main__':
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
-    check_name_similarity(updated_food_dataset)
+    profile_name(updated_food_dataset)
     profile_risk_column(updated_food_dataset)
     profile_inspection_date(updated_food_dataset)
     profile_inspection_type(updated_food_dataset)
     profile_results(updated_food_dataset)
-    profiling_zip(updated_food_dataset)
-    profiling_state(updated_food_dataset)
+    profile_zip(updated_food_dataset)
+    profile_state(updated_food_dataset)
     check_zip_state_city_mapping(updated_food_dataset)
     check_city_state_spelling(updated_food_dataset)
-    analyze_violations_structure(updated_food_dataset, sample_size=1000)
+    profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
     
     
