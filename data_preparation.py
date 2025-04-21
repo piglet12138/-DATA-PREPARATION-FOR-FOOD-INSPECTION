@@ -407,7 +407,7 @@ def fix_city_name(df, city_col='city', threshold=85):
 
 def parse_comments(text):
     """
-    Parse the comments from the 'Violations' column.
+    Parse the comments from the 'violations' column.
     Each comment is expected to be in the format:
     "Code. Category - Comments: Comment text"
     The function returns a list of dictionaries with keys:
@@ -428,31 +428,31 @@ def parse_comments(text):
 
 def parse_violations(df):
     '''
-    Parse the 'Violations' column in the dataframe.
-    Each entry in the 'Violations' column is expected to contain multiple violations
+    Parse the 'violations' column in the dataframe.
+    Each entry in the 'violations' column is expected to contain multiple violations
     separated by '|'. Each violation is in the format:
     "Code. Category - Comments: Comment text"
     The function returns a new dataframe with the following columns:
-    - Inspection ID
-    - Violation Code
-    - Category
-    - Comment
+    - inspection_id
+    - violation_code
+    - category
+    - comment
 
     Example usage:
     normalized_violations = parse_violations(df)
     '''
     # Fill NA values with empty string to avoid errors
-    df['Violations'] = df['Violations'].fillna('')
+    df['violations'] = df['violations'].fillna('')
     
     # Parse each violation entry
-    parsed_rows = df['Violations'].apply(parse_comments)
+    parsed_rows = df['violations'].apply(parse_comments)
     
     # Create a new dataframe with the parsed data
     violations_df = pd.DataFrame({
-        'Inspection ID': df['Inspection ID'].repeat(parsed_rows.apply(len)),
-        # 'DBA Name': df['DBA Name'].repeat(parsed_rows.apply(len)),
-        # 'Inspection Date': df['Inspection Date'].repeat(parsed_rows.apply(len)),
-        # 'Inspection Type': df['Inspection Type'].repeat(parsed_rows.apply(len)),
+        'inspection_id': df['inspection_id'].repeat(parsed_rows.apply(len)),
+        # 'dba_name': df['dba_name'].repeat(parsed_rows.apply(len)),
+        # 'inspection_date': df['inspection_date'].repeat(parsed_rows.apply(len)),
+        # 'inspection_type': df['inspection_type'].repeat(parsed_rows.apply(len)),
         # 'Results': df['Results'].repeat(parsed_rows.apply(len))
     })
     
@@ -478,14 +478,14 @@ def create_normalized_tables(df):
     tuple: (facility_df, inspection_df)
     """
     # Create the facility table with unique facility information
-    # Use License # as the primary key
-    facility_df = df[['License #', 'DBA Name', 'AKA Name', 'Facility Type', 
-                      'Risk', 'Address', 'City', 'State', 'Zip', 
-                      'Latitude', 'Longitude', 'Location']].drop_duplicates(subset=['License #'])
+    # Use license_num as the primary key
+    facility_df = df[['license_num', 'dba_name', 'aka_name', 'facility_type', 
+                      'risk', 'address', 'city', 'state', 'zip', 
+                      'latitude', 'longitude', 'location']].drop_duplicates(subset=['license_num'])
     
     # Create inspection table with inspection information and foreign key to facility table
-    inspection_df = df[['Inspection ID', 'License #', 'Inspection Date', 
-                        'Inspection Type', 'Results', 'Violations']]
+    inspection_df = df[['inspection_id', 'license_num', 'inspection_date', 
+                        'inspection_type', 'Results', 'violations']]
     
     return facility_df, inspection_df
 
