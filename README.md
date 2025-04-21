@@ -12,6 +12,7 @@ This repo contains a complete data pipeline for processing, cleaning, analyzing,
     - Missing coordinates (geocoding)
     - Risk categories
     - Business names
+    - Fill missing values with FDs
 - Saves cleaned dataset to CSV for future use
 
 ## Data Profiling and Quality Checks
