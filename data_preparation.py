@@ -599,26 +599,26 @@ def query_to_df(db_name, query):
         print(f"Error running query: {e}")
         return None
 
+if __name__ == '__main__':
+    food_dataset = pd.read_csv("Food_Inspections_20250216.csv")
+    updated_food_dataset = food_dataset.copy()
+    # Apply function
+    updated_food_dataset = col_name_changer(updated_food_dataset)
+    updated_food_dataset = process_license_numbers(updated_food_dataset)
+    updated_food_dataset = clean_zip_data(updated_food_dataset).drop(columns=['zip','zip_valid'],axis=1).rename(columns={'zip_clean':'zip'})
+    updated_food_dataset['state'] = updated_food_dataset.apply(
+        lambda row: row['state'] if pd.notna(row['state']) else get_zip_info(row['zip'],'state'),
+        axis=1)
+    updated_food_dataset['city'] = updated_food_dataset.apply(
+        lambda row: row['city'] if pd.notna(row['city']) else get_zip_info(row['zip'],'city'),
+        axis=1)
+    updated_food_dataset = geocode_missing_coordinates(updated_food_dataset)
+    updated_food_dataset = risk_column_transformation(updated_food_dataset)
+    updated_food_dataset = standardize_name_columns(updated_food_dataset)
+    updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updated_food_dataset['dba_name'])
+    updated_food_dataset = fix_city_name(updated_food_dataset)
+    updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
-food_dataset = pd.read_csv("Food_Inspections_20250216.csv")
-updated_food_dataset = food_dataset.copy()
-# Apply function
-updated_food_dataset = col_name_changer(updated_food_dataset)
-updated_food_dataset = process_license_numbers(updated_food_dataset)
-updated_food_dataset = clean_zip_data(updated_food_dataset).drop(columns=['zip','zip_valid'],axis=1).rename(columns={'zip_clean':'zip'})
-updated_food_dataset['state'] = updated_food_dataset.apply(
-    lambda row: row['state'] if pd.notna(row['state']) else get_zip_info(row['zip'],'state'),
-    axis=1)
-updated_food_dataset['city'] = updated_food_dataset.apply(
-    lambda row: row['city'] if pd.notna(row['city']) else get_zip_info(row['zip'],'city'),
-    axis=1)
-updated_food_dataset = geocode_missing_coordinates(updated_food_dataset)
-updated_food_dataset = risk_column_transformation(updated_food_dataset)
-updated_food_dataset = standardize_name_columns(updated_food_dataset)
-updated_food_dataset['aka_name'] = updated_food_dataset['aka_name'].fillna(updated_food_dataset['dba_name'])
-updated_food_dataset = fix_city_name(updated_food_dataset)
-updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
-
-violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
-facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
+    violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
+    facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
