@@ -141,7 +141,7 @@ def repair_dataset_based_on_fd(df, fds_to_fix):
                 total_rows_affected += rows_affected
                 print(f"  Fixed: {fd} X={x_value}, set NaN values to {suggested_y} (affected {rows_affected} rows)")
             else:
-                print(f"  No repair needed: {fd} X={x_value} - no matching NaN values")
+                continue
 
         repair_stats["repairs_applied"] = repairs_applied
         repair_stats["repairs_skipped"] = skipped_repairs
