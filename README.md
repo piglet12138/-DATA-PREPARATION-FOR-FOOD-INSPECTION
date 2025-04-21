@@ -34,7 +34,10 @@ The data is normalized into three main tables:
 These tables are then stored in a SQLite database called `food_inspections.db`
 
 ## How to Run
-1. Ensure you have the required dependencies installed (`pandas`, etc.)
+1. Ensure you have the required dependencies installed
+    ```bash
+    pip install -r requirements.txt
+    ```
 2. Place the input CSV file (`Food_Inspections_20250216.csv`) in the working directory
 3. Make sure the `data_preparation.py` module is available in your path
 4. Execute the script in the command line 
