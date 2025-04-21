@@ -1152,6 +1152,84 @@ def association_rule_mining(dataset, categorical_columns=None, violation_column=
     return results
 
 
+def plot_city_wordcloud_and_freq_table(updated_food_dataset):
+    """
+    Function to plot word clouds and frequency tables for city names in the dataset.
+    Args:  
+        updated_food_dataset: DataFrame containing the dataset with city names
+    """
+
+    # Step 1: Clean data
+    df_clean = updated_food_dataset.copy()
+    df_clean['City'] = df_clean['City'].astype(str).str.strip()
+    df_clean = df_clean[df_clean['City'] != '']
+    print(f"Removed {len(updated_food_dataset) - len(df_clean)} empty/NaN entries")
+
+    # Step 2: Term frequencies
+    term_counts = Counter(df_clean['City'])
+
+    # --- First Word Cloud: Highlight potential typos (low-frequency terms) ---
+    size_map = {term: max(1, 10 - count) for term, count in term_counts.items()}  # Invert so rare words appear bigger
+
+    wordcloud_typos = WordCloud(
+        width=800,
+        height=400,
+        background_color='white',
+        colormap='Reds',
+        prefer_horizontal=0.9
+    ).generate_from_frequencies(size_map)
+
+    plt.figure(figsize=(12, 6))
+    plt.imshow(wordcloud_typos, interpolation='bilinear')
+    plt.axis('off')
+    plt.title('City Names - Potential Typos (low-frequency terms appear larger)', pad=20)
+    plt.show()
+
+    print("\n\033[1mAll Term Frequencies (Potential Typos in Red):\033[0m")
+    for term, count in sorted(term_counts.items(), key=lambda x: x[1]):
+        color = '\033[91m' if count <= 1 else '\033[0m'
+        print(f"{color}{term}: {count}\033[0m")
+
+    # --- Second Word Cloud: Top 20 cities with continuous color scale ---
+    top_20 = dict(term_counts.most_common(20))
+    colors = plt.cm.coolwarm(np.linspace(0, 1, 256))
+    color_map = mcolors.LinearSegmentedColormap.from_list("coolwarm", colors)
+    norm = mcolors.Normalize(vmin=min(top_20.values()), vmax=max(top_20.values()))
+
+    def color_func(word, font_size, position, orientation, **kwargs):
+        freq = top_20.get(word, 1)
+        rgba = color_map(norm(freq))
+        return mcolors.rgb2hex(rgba)
+
+    wordcloud_top20 = WordCloud(
+        width=1000,
+        height=600,
+        background_color='white',
+        max_words=20,
+        prefer_horizontal=0.9,
+        colormap='coolwarm'
+    ).generate_from_frequencies(top_20)
+
+    plt.figure(figsize=(15, 8))
+    plt.imshow(wordcloud_top20, interpolation='bilinear')
+    plt.axis('off')
+    plt.title('Top 20 Cities - Continuous Color by Frequency', pad=20, fontsize=16)
+
+    # Add colorbar
+    sm = plt.cm.ScalarMappable(cmap='coolwarm', norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, orientation='vertical', pad=0.03)
+    cbar.set_label('Word Frequency', rotation=270, labelpad=20)
+    plt.show()
+
+    print("\n\033[1mTOP 20 CITIES BY FREQUENCY:\033[0m")
+    for i, (city, count) in enumerate(sorted(top_20.items(), key=lambda x: -x[1]), 1):
+        norm_val = norm(count)
+        rgba = color_map(norm_val)
+        ansi_color = f"\033[38;2;{int(rgba[0]*255)};{int(rgba[1]*255)};{int(rgba[2]*255)}m"
+        print(f"{i:2}. {ansi_color}{city:15}\033[0m: {count} occurrences")
+
+
 def repair_dataset_based_on_fd(df, fds_to_fix):
     """
     Repair missing values in dataset based on functional dependencies (FD)
@@ -2601,6 +2679,8 @@ if __name__ == '__main__':
     check_city_state_spelling(updated_food_dataset)
     profile_violations(updated_food_dataset, sample_size=1000)
     verify_violations_structure(updated_food_dataset)
+
+    plot_city_wordcloud_and_freq_table(updated_food_dataset)
 
     ##### INGESTING TO SQL DATABASE #####
 
