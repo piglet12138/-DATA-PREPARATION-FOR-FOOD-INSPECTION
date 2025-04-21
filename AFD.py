@@ -216,16 +216,17 @@ def main():
         'csv_file': 'cleaned_dataset_for_FD.csv',  # Input CSV file path
         'columns': None,         # Columns to analyze (None for auto-selection)
         'max_lhs': 2,            # Maximum LHS attribute size
-        'threshold': 0.05,       # g3 metric threshold
+        'threshold': 0.10,       # g3 metric threshold
         'output': 'AFD_result.csv',  # Output file path
-        'sample_size': 5000,     # Sample size for large datasets
+        'sample_size': 10000,     # Sample size for large datasets
         'remove_redundant': True # Whether to remove redundant AFDs
     }
     
     # Specific columns to analyze (set to None to auto-select)
     selected_columns = [
     "inspection_id", "license_num", "dba_name", "facility_type",
-    "risk", "city", "state", "results"
+    "risk", "city", "state", "results","address","zip","aka_name",
+        "inspection_date","location"
 ]
     # Example: selected_columns = ["column1", "column2", "column3"]
     
