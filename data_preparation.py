@@ -12,6 +12,370 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 ##### DATA PROFILING #####
+
+def check_name_similarity(df, dba_col='dba_name', aka_col='aka_name', 
+                        similarity_threshold=0.8, fill_missing=True):
+    """
+    Analyzes similarity between two name columns and optionally fills missing values.
+    
+    Parameters:
+    - df: DataFrame containing the columns
+    - dba_col: Formal name column (default 'dba_name')
+    - aka_col: Alternate name column (default 'aka_name')
+    - similarity_threshold: Score above which names are considered similar (0-1)
+    - fill_missing: Whether to fill missing aka_names with dba_names (default True)
+    
+    Returns:
+    - DataFrame with similarity analysis and optionally filled values
+    - Similarity statistics
+    """
+    
+    # Create working copy
+    df = df.copy()
+    
+    # 1. Handle missing values
+    missing_mask = df[aka_col].isna()
+    if fill_missing:
+        df.loc[missing_mask, aka_col] = df.loc[missing_mask, dba_col]
+    
+    # 2. Calculate similarity metrics
+    def get_similarity(a, b):
+        if pd.isna(a) or pd.isna(b):
+            return 0
+        return SequenceMatcher(None, str(a).lower(), str(b).lower()).ratio()
+    
+    df['name_similarity'] = df.apply(
+        lambda x: get_similarity(x[dba_col], x[aka_col]), axis=1
+    )
+    
+    # 3. Categorize relationships
+    conditions = [
+        df[aka_col].isna(),
+        df[dba_col] == df[aka_col],
+        df['name_similarity'] >= similarity_threshold,
+        df['name_similarity'] > 0
+    ]
+    choices = [
+        'missing',
+        'exact_match',
+        'similar',
+        'different'
+    ]
+    df['name_relationship'] = pd.cut(
+        df['name_similarity'],
+        bins=[-1, 0, 0.1, similarity_threshold, 1],
+        labels=['missing', 'different', 'some_similarity', 'similar']
+    )
+    
+    # 4. Generate statistics
+    stats = {
+        'missing_initial': missing_mask.sum(),
+        'missing_filled': fill_missing * missing_mask.sum(),
+        'exact_matches': (df[dba_col] == df[aka_col]).sum(),
+        'similar_count': (df['name_similarity'] >= similarity_threshold).sum(),
+        'avg_similarity': df['name_similarity'].mean()
+    }
+    
+    # display
+    def display_similarity_stats(stats):
+        """
+        Displays the similarity statistics in a simple DataFrame format.
+        
+        Parameters:
+            stats (dict): Dictionary containing the similarity statistics
+        """
+        # Convert stats to DataFrame and format
+        stats_df = pd.DataFrame.from_dict(stats, orient='index', columns=['Value'])
+        
+        # Format numeric values
+        stats_df['Value'] = stats_df['Value'].apply(
+            lambda x: f"{x:,.0f}" if isinstance(x, (int, float)) and x == int(x) 
+            else f"{x:,.2f}" if isinstance(x, float) 
+            else x
+        )
+        
+        # Add description for each metric
+        descriptions = {
+            'missing_initial': 'Initial missing aka_name values',
+            'missing_filled': 'aka_name values filled with dba_name',
+            'exact_matches': 'Exact matches between names',
+            'similar_count': 'Similar names (above threshold)',
+            'avg_similarity': 'Average similarity score'
+        }
+        
+        stats_df['Description'] = stats_df.index.map(descriptions)
+        stats_df = stats_df[['Description', 'Value']]  # Reorder columns
+        
+        # Display with basic formatting
+        print("Name Similarity Statistics")
+        print("=" * 40)
+        print(stats_df)
+        print("=" * 40)
+
+    display_similarity_stats(stats)
+    return df, stats
+
+def profile_risk_column(df, risk_col='risk'):
+    """
+    Profiles a risk column with 'High', 'Medium', 'Low', and 'All' categories
+    using the Set3 color palette without warnings.
+    """
+    # Create a clean copy and handle missing values
+    df_clean = df.copy()
+    df_clean[risk_col] = df_clean[risk_col].fillna('All')
+    
+    # Define allowed categories and Set3 colors
+    valid_categories = ['High', 'Medium', 'Low', 'All']
+    set3_colors = sns.color_palette("Set3", len(valid_categories)).as_hex()  # Convert to hex list
+    
+    # Initialize profile results
+    profile = {
+        'value_counts': None,
+        'invalid_values': None,
+        'pre_missing_count': df[risk_col].isna().sum()
+    }
+    
+    # Value counts with percentages
+    value_counts = df_clean[risk_col].value_counts()
+    percentages = df_clean[risk_col].value_counts(normalize=True) * 100
+    profile['value_counts'] = pd.DataFrame({
+        'Count': value_counts,
+        'Percentage': percentages.round(2)
+    }).reindex(valid_categories)
+    
+    # Data quality checks
+    invalid_mask = ~df_clean[risk_col].isin(valid_categories)
+    profile['invalid_values'] = df_clean.loc[invalid_mask, risk_col].unique()
+    profile['invalid_count'] = invalid_mask.sum()
+    
+    # Visualization with Set3 palette
+    plt.figure(figsize=(14, 6))
+    
+    # 1. Count plot (corrected to avoid warnings)
+    plt.subplot(1, 2, 1)
+    ax = sns.countplot(
+        x=risk_col, 
+        data=df_clean, 
+        order=valid_categories,
+        hue=risk_col,  # Added to fix warning
+        palette=set3_colors,
+        legend=False   # Added to avoid duplicate legend
+    )
+    plt.title('Risk Level Distribution (Missing → All)', pad=20)
+    
+    # Add percentage labels
+    total = len(df_clean)
+    for p in ax.patches:
+        height = p.get_height()
+        ax.text(p.get_x() + p.get_width()/2., height + 0.01*total,
+                f'{height/total:.1%}',
+                ha='center', fontsize=10)
+    
+    # 2. Pie chart
+    plt.subplot(1, 2, 2)
+    df_clean[risk_col].value_counts().reindex(valid_categories).plot.pie(
+        autopct='%1.1f%%',
+        colors=set3_colors,
+        startangle=90,
+        textprops={'fontsize': 12}
+    )
+    plt.title('Risk Level Proportion', pad=20)
+    plt.ylabel('')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return profile
+
+def profile_inspection_date(df):
+    """Profiles the inspection_date column with temporal analysis"""
+    # Convert to datetime and extract features
+    df['inspection_date'] = pd.to_datetime(df['inspection_date'])
+    df['inspection_year'] = df['inspection_date'].dt.year
+    df['inspection_month'] = df['inspection_date'].dt.month_name()
+    
+    # Plot temporal distribution
+    plt.figure(figsize=(15, 5))
+    
+    # Yearly trend
+    plt.subplot(1, 2, 1)
+    yearly_counts = df['inspection_year'].value_counts().sort_index()
+    sns.lineplot(x=yearly_counts.index, y=yearly_counts.values)
+    plt.title('Inspections by Year')
+    plt.xlabel('Year')
+    plt.ylabel('Count')
+    
+    # Monthly distribution
+    plt.subplot(1, 2, 2)
+    month_order = ['January', 'February', 'March', 'April', 'May', 'June', 
+                   'July', 'August', 'September', 'October', 'November', 'December']
+    monthly_counts = df['inspection_month'].value_counts().reindex(month_order)
+    sns.barplot(x=monthly_counts.index, y=monthly_counts.values)
+    plt.title('Inspections by Month')
+    plt.xticks(rotation=45)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # Date statistics
+    print(f"Date Range: {df['inspection_date'].min().date()} to {df['inspection_date'].max().date()}")
+    print(f"Most Active Year: {yearly_counts.idxmax()} ({yearly_counts.max():,} inspections)")
+    print(f"Most Active Month: {monthly_counts.idxmax()} ({monthly_counts.max():,} inspections)")
+
+def standardize_inspection_types(df):
+    """
+    Standardizes inspection types into 6 official categories with re-inspection flags:
+    ['canvass', 'consultation', 'complaint', 'license', 
+    'suspect food poisoning', 'task-force inspection']
+    Preserves re-inspection status when present.
+    """
+    # Primary category mapping with regex patterns
+    category_map = {
+        'canvass': r'(canvass|routine|periodic|standard|surveillance)',
+        'consultation': r'(consult|pre.?open|pre.?operat)',
+        'complaint': r'(complaint|consumer|public\s*health)',
+        'license': r'(license|permit|new\s*establishment|initial)',
+        'suspect food poisoning': r'(food\s*poison|outbreak|illness|contaminat)',
+        'task-force inspection': r'(task\s*force|bar|tavern|special|targeted)'
+    }
+    
+    # Standardize text format
+    df = df.copy()
+    df['inspection_type'] = df['inspection_type'].str.strip().str.lower()
+    
+    # Function to categorize with re-inspection detection
+    def categorize(insp_type):
+        if pd.isna(insp_type):
+            return None
+        
+        # Check for re-inspection designation first
+        is_reinspection = 're-inspect' in insp_type or 'reinspect' in insp_type or 'follow.up' in insp_type
+        
+        # Determine primary category
+        primary_category = 'other'
+        for category, pattern in category_map.items():
+            if re.search(pattern, insp_type, flags=re.IGNORECASE):
+                primary_category = category
+                break
+        
+        # Append re-inspection designation if found
+        if is_reinspection and primary_category != 'other':
+            return f"{primary_category} (re-inspection)"
+        return primary_category
+    
+    # Apply standardization
+    df['standardized_type'] = df['inspection_type'].apply(categorize)
+    
+    return df
+
+def profile_inspection_type(df):
+    """Profiles the standardized inspection types"""
+    
+    # standardize inspection_type options
+
+    df_std = standardize_inspection_types(df)
+    
+    # Calculate distribution
+    type_counts = df_std['standardized_type'].value_counts()
+    type_pct = (df_std['standardized_type'].value_counts(normalize=True) * 100).round(1)
+    
+    # Get ordered list of categories for consistent plotting
+    ordered_categories = type_counts.index.tolist()
+    
+    # Visualization
+    plt.figure(figsize=(12, 6))
+    ax = sns.barplot(
+        x=type_counts.values,
+        y=type_counts.index,
+        order=ordered_categories,
+        palette="husl"
+    )
+    
+    # Add value labels - FIXED VERSION
+    for i, p in enumerate(ax.patches):
+        width = p.get_width()
+        category = ordered_categories[i]  # Get category by position
+        ax.text(
+            width + max(type_counts)*0.01,
+            p.get_y() + p.get_height()/2,
+            f'{width:,} ({type_pct[category]}%)',
+            va='center'
+        )
+    
+    plt.title('Standardized Inspection Types', pad=20)
+    plt.xlabel('Count', labelpad=10)
+    plt.ylabel('')
+    plt.xlim(0, max(type_counts)*1.2)
+    
+    # Print stats
+    print("Standardized Inspection Type Distribution:")
+    print("="*55)
+    for typ, cnt in type_counts.items():
+        print(f"• {typ.title():<30}: {cnt:>7,} ({type_pct[typ]}%)")
+    print("="*55)
+
+def profile_results(df):
+    """
+    Profiles the results column with outcome analysis
+    using a 7-color palette optimized for readability.
+    """
+    # Clean and standardize results
+    df = df.copy()  # Avoid modifying original DataFrame
+    df['results'] = df['results'].str.strip().str.title()
+    
+    # Calculate distribution
+    result_counts = df['results'].value_counts()
+    result_pct = (df['results'].value_counts(normalize=True) * 100).round(1)
+    
+    # Visualization with Set2 palette
+    plt.figure(figsize=(10, 6))
+    
+    # Get 7 colors from Set2 palette
+    palette = sns.color_palette("Set2", 7)
+    
+    # Create ordered list of results (pass-like outcomes first)
+    ordered_results = sorted(
+        result_counts.index,
+        key=lambda x: (
+            0 if 'Pass' in x else 
+            1 if 'Fail' in x else 
+            2 if 'Condition' in x else 3
+        )
+    )
+    
+    # Plot with corrected syntax
+    ax = sns.barplot(
+        x=result_counts.loc[ordered_results].values,
+        y=ordered_results,
+        palette=palette,
+        hue=ordered_results if len(ordered_results) > 1 else None,
+        legend=False,
+        dodge=False
+    )
+    
+    # Add value labels
+    for p in ax.patches:
+        width = p.get_width()
+        ax.text(
+            width + max(result_counts)*0.01,
+            p.get_y() + p.get_height()/2,
+            f'{width:,} ({result_pct[ordered_results[int(p.get_y() + 0.5)]]}%)',
+            va='center',
+            fontsize=10
+        )
+    
+    plt.title('Inspection Outcomes Distribution', pad=20)
+    plt.xlabel('Count', labelpad=10)
+    plt.ylabel('Result', labelpad=10)
+    plt.xlim(0, max(result_counts)*1.15)
+    
+    # Print key stats
+    print("\nOutcome Distribution Summary:")
+    print("="*40)
+    for result in ordered_results:
+        print(f"• {result:<20}: {result_counts[result]:>8,} ({result_pct[result]}%)")
+    print("="*40)
+    
 def profiling_zip(df):
     '''
     Function to profile ZIP codes in the dataset.
@@ -878,12 +1242,11 @@ if __name__ == '__main__':
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
-    analyze_violations_structure(updated_food_dataset, sample_size=1000)
-    verify_violations_structure(updated_food_dataset)
-    profiling_zip(updated_food_dataset)
-    profiling_state(updated_food_dataset)
-    check_zip_state_city_mapping(updated_food_dataset)
-    check_city_state_spelling(updated_food_dataset)
+    check_name_similarity(updated_food_dataset)
+    profile_risk_column(updated_food_dataset)
+    profile_inspection_date(updated_food_dataset)
+    profile_inspection_type(updated_food_dataset)
+    profile_results(updated_food_dataset)
     
     
     ##### INGESTING TO SQL DATABASE #####
