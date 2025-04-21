@@ -33,6 +33,143 @@ from collections import defaultdict
 
 ##### DATA PROFILING #####
 
+# descriptive stats functions (both to make separate or combined)
+def generate_descriptive_stats(df, separate_tables=True):
+    """
+    Enhanced descriptive statistics with datetime and boolean support.
+    
+    Args:
+        df (pd.DataFrame): Input DataFrame
+        separate_tables (bool): If True, returns dict with separate tables
+        
+    Returns:
+        dict or pd.DataFrame: Statistics with proper type handling
+    """
+    stats_df = generate_combined_stats(df)
+    
+    if not separate_tables:
+        return stats_df
+    
+    # Improved type separation
+    numerical_cols = stats_df[stats_df['dtype'].isin(['int64', 'float64'])]['column'].tolist()
+    datetime_cols = stats_df[stats_df['dtype'] == 'datetime64[ns]']['column'].tolist()
+    boolean_cols = stats_df[stats_df['dtype'] == 'bool']['column'].tolist()
+    categorical_cols = [col for col in stats_df['column'] 
+                      if col not in numerical_cols + datetime_cols + boolean_cols]
+    
+    result = {
+        'numerical': stats_df[stats_df['column'].isin(numerical_cols)],
+        'categorical': stats_df[stats_df['column'].isin(categorical_cols)]
+    }
+    
+    # Add special type tables if they exist
+    if datetime_cols:
+        result['datetime'] = stats_df[stats_df['column'].isin(datetime_cols)]
+    if boolean_cols:
+        result['boolean'] = stats_df[stats_df['column'].isin(boolean_cols)]
+    
+    return result
+
+def generate_combined_stats(df):
+    """Core statistics generator with proper type handling"""
+    stats_list = []
+    
+    for col in df.columns:
+        col_stats = {
+            'column': col,
+            'dtype': str(df[col].dtype),
+            'total_count': len(df[col]),
+            'missing_count': df[col].isna().sum(),
+            'missing_pct': round(df[col].isna().mean() * 100, 2),
+            'unique_count': df[col].nunique()
+        }
+        
+        # Handle datetime columns
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            col_stats.update({
+                'min_date': df[col].min(),
+                'max_date': df[col].max(),
+                'date_range': (df[col].max() - df[col].min()).days
+            })
+            
+        # Handle boolean columns
+        elif pd.api.types.is_bool_dtype(df[col]):
+            col_stats.update({
+                'true_count': df[col].sum(),
+                'false_count': (~df[col]).sum(),
+                'true_pct': round(df[col].mean() * 100, 2)
+            })
+            
+        # Numerical columns (excluding booleans)
+        elif pd.api.types.is_numeric_dtype(df[col]):
+            col_stats.update({
+                'mean': round(float(df[col].mean()), 4) if not df[col].empty else None,
+                'std_dev': round(float(df[col].std()), 4) if not df[col].empty else None,
+                'min': round(float(df[col].min()), 4) if not df[col].empty else None,
+                '25%': round(float(df[col].quantile(0.25)), 4) if not df[col].empty else None,
+                'median': round(float(df[col].median()), 4) if not df[col].empty else None,
+                '75%': round(float(df[col].quantile(0.75)), 4) if not df[col].empty else None,
+                'max': round(float(df[col].max()), 4) if not df[col].empty else None,
+                'skewness': round(float(df[col].skew()), 4) if not df[col].empty else None,
+                'kurtosis': round(float(df[col].kurtosis()), 4) if not df[col].empty else None
+            })
+            
+        # Categorical columns
+        else:
+            col_stats.update({
+                'top_value': df[col].mode().iloc[0] if not df[col].mode().empty else np.nan,
+                'top_freq': df[col].value_counts().iloc[0] if not df[col].value_counts().empty else 0,
+                'top_pct': round((df[col].value_counts().iloc[0] / len(df[col])) * 100, 2) 
+                            if not df[col].value_counts().empty else 0
+            })
+            
+        stats_list.append(col_stats)
+    
+    return pd.DataFrame(stats_list)
+
+# to generate a table if data type conversion is successful
+def report_dtype_compliance(df):
+    """
+    Generates a compliance report comparing actual vs expected dtypes
+    
+    Returns:
+        pd.DataFrame: Compliance report
+    """
+    expected_dtypes = {
+        'inspection_id': 'int64',
+        'dba_name': 'object',
+        'aka_name': 'object',
+        'license_num': 'object',
+        'facility_type': 'object',
+        'risk': 'object',
+        'address': 'object',
+        'city': 'object',
+        'state': 'object',
+        'zip': 'object',
+        'inspection_date': 'datetime64[ns]',
+        'inspection_type': 'object',
+        'results': 'object',
+        'violations': 'object',
+        'latitude': 'float64',
+        'longitude': 'float64',
+        'location': 'object'
+    }
+    
+    compliance_report = []
+    
+    for col, expected_dtype in expected_dtypes.items():
+        actual_dtype = str(df[col].dtype) if col in df.columns else 'MISSING'
+        compliance_report.append({
+            'column': col,
+            'expected_dtype': expected_dtype,
+            'actual_dtype': actual_dtype,
+            'is_compliant': actual_dtype == expected_dtype,
+            'missing_values': df[col].isna().sum() if col in df.columns else None,
+            'missing_pct': round(df[col].isna().mean() * 100, 2) if col in df.columns else None
+        })
+    
+    return pd.DataFrame(compliance_report)
+
 def profile_name(df, dba_col='dba_name', aka_col='aka_name', 
                         similarity_threshold=0.8, fill_missing=True):
     """
@@ -672,6 +809,43 @@ def profile_violations(violations_df):
     plt.show()
 
 
+# Scatter plot to see latitude and longitude distribution for first 1000 data
+def profile_coordinates(df, lat_col='latitude', lon_col='longitude', 
+                        sample_size=1000, alpha=0.5, figsize=(10,6)):
+    """
+    Creates a scatter plot of geographic coordinates with density highlights.
+    
+    Args:
+        df: DataFrame containing the data
+        lat_col: Name of latitude column
+        lon_col: Name of longitude column
+        sample_size: Number of points to sample (for large datasets)
+        alpha: Transparency of points
+        figsize: Figure dimensions
+    """
+    # Sample data if large
+    plot_df = df.sample(min(sample_size, len(df))) if sample_size else df
+    
+    plt.figure(figsize=figsize)
+    sns.scatterplot(
+        x=lon_col, 
+        y=lat_col, 
+        data=plot_df,
+        alpha=alpha,
+        color='blue'
+    )
+    
+    # Add titles and labels
+    plt.title('Geographic Coordinate Distribution', fontsize=14)
+    plt.xlabel('Longitude', fontsize=12)
+    plt.ylabel('Latitude', fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.3)
+    
+    # Equal aspect ratio for proper geo visualization
+    plt.gca().set_aspect('equal', adjustable='box')
+    plt.show()
+
+
 ##### DATA PROCESSING ######
 """
 try to normalize data cleaning and evaluate data quility
@@ -688,6 +862,61 @@ def col_name_changer(df):
     df.columns = df.columns.str.replace("#",'num')
     # 4. Perform strip to ensure no extra white spaces
     df.columns = df.columns.str.strip()
+    return df
+
+# Data type converter function
+def validate_and_convert_dtypes(df):
+    """
+    Ensures DataFrame columns match expected data types:
+    - inspection_id: int64
+    - Text columns: object (string)
+    - Lat/Long: float64
+    - inspection_date: datetime
+    
+    Args:
+        df (pd.DataFrame): Input DataFrame
+        
+    Returns:
+        pd.DataFrame: DataFrame with corrected dtypes
+    """
+    # Define expected dtypes
+    dtype_spec = {
+        'inspection_id': 'int64',
+        'dba_name': 'object',
+        'aka_name': 'object',
+        'license_num': 'object',  # Stored as string even if numeric
+        'facility_type': 'object',
+        'risk': 'object',
+        'address': 'object',
+        'city': 'object',
+        'state': 'object',
+        'zip': 'object',
+        'inspection_type': 'object',
+        'results': 'object',
+        'violations': 'object',
+        'location': 'object',
+        'latitude': 'float64',
+        'longitude': 'float64'
+    }
+    
+    # Special handling for dates
+    if 'inspection_date' in df.columns:
+        df['inspection_date'] = pd.to_datetime(df['inspection_date'], errors='coerce')
+    
+    # Convert each column
+    for col, expected_dtype in dtype_spec.items():
+        if col in df.columns:
+            try:
+                if expected_dtype == 'object':
+                    # Convert to string, handling missing values
+                    df[col] = df[col].astype(str).replace('nan', pd.NA)
+                else:
+                    # For numeric types
+                    df[col] = pd.to_numeric(df[col], errors='coerce').astype(expected_dtype)
+            except Exception as e:
+                print(f"⚠️ Failed to convert {col} to {expected_dtype}: {str(e)}")
+                # Keep original dtype if conversion fails
+                
     return df
 
 
@@ -1581,6 +1810,7 @@ if __name__ == '__main__':
     updated_food_dataset = food_dataset.copy()
     # Apply function
     updated_food_dataset = col_name_changer(updated_food_dataset)
+    updated_food_dataset = validate_and_convert_dtypes(updated_food_dataset)
 
     ##### DATA PROCESSING #####
     updated_food_dataset = process_license_numbers(updated_food_dataset)
@@ -1599,6 +1829,22 @@ if __name__ == '__main__':
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
     ##### DATA PROFILING #####
+    # General profiling
+    separated_stats = generate_descriptive_stats(updated_food_dataset, separate_tables=True)
+
+    # Print numerical table
+    print("\n🔢 NUMERICAL VARIABLES")
+    print(separated_stats['numerical'].to_markdown(tablefmt="grid", stralign="center", numalign="center", floatfmt=".2f"))
+
+    # Print categorical table
+    print("\n📝 CATEGORICAL VARIABLES")
+    print(separated_stats['categorical'].to_markdown(tablefmt="grid", stralign="left"))
+
+    # Print datetime table
+    print("\n DATETIME VARIABLES")
+    print(separated_stats['datetime'].to_markdown(tablefmt="grid", stralign="left"))
+    
+    # Single column-based profiling
     profile_name(updated_food_dataset)
     profile_risk_column(updated_food_dataset)
     profile_inspection_date(updated_food_dataset)
@@ -1613,6 +1859,8 @@ if __name__ == '__main__':
     
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
     profile_violations(violations_df)
+    
+    profile_coordinates(updated_food_dataset)
     
     ##### INGESTING TO SQL DATABASE #####
     facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
