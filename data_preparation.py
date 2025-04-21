@@ -1926,6 +1926,7 @@ if __name__ == '__main__':
     )
     
     # Save tables to SQLite database
+    facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
     df_to_sqlite(violations_df, 'food_inspections.db', 'violations', if_exists='replace', index=False)
     df_to_sqlite(facility_df, 'food_inspections.db', 'facility', if_exists='replace', index=False)
     df_to_sqlite(inspection_df, 'food_inspections.db', 'inspection', if_exists='replace', index=False)
