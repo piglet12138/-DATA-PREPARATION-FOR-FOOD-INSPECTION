@@ -25,6 +25,8 @@ The pipeline performs various data quality checks:
 - Verify location data (ZIP codes, states)
 - Check for proper mapping between ZIP/state/city
 - Inspect violation data structure and content
+- Association mining
+- FD mining with TANE
 
 ## Database Normalization and Storage
 The data is normalized into three main tables:
