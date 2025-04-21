@@ -22,6 +22,8 @@ import sys
 from tqdm import tqdm
 from tane import TANE, PPattern, read_db, tostr
 from mlxtend.frequent_patterns import apriori, association_rules
+from sklearn.cluster import KMeans
+from sklearn.feature_extraction.text import TfidfVectorizer
 tane_imported = True
 
 

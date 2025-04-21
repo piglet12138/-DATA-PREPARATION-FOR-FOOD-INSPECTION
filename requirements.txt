@@ -10,3 +10,4 @@ seaborn
 mlxtend
 tqdm
 tabulate
+sklearn
