@@ -1623,6 +1623,7 @@ if __name__ == '__main__':
     df_to_sqlite(inspection_df, 'food_inspections.db', 'inspection', if_exists='replace', index=False)
 
     #TANE set up
+    df = updated_food_dataset
     columns_to_exclude = ['violations']
     # Select subset of columns to speed up algorithm
     df_analysis = df.drop(columns=columns_to_exclude)
@@ -1649,17 +1650,17 @@ if __name__ == '__main__':
     else:
         print("No functional dependencies discovered or unable to parse results.")
 
-  #IND
-  columns_to_exclude = ['Violations' ]
-  columns_to_include = ['Inspection ID', 'DBA Name', 'AKA Name', 'License #',
+    #IND
+    columns_to_exclude = ['Violations' ]
+    columns_to_include = ['Inspection ID', 'DBA Name', 'AKA Name', 'License #',
                         'Facility Type', 'Risk', 'City', 'State', 'Zip',
                         'Inspection Type', 'Results','Location']
-  df_analysis = df.drop(columns=columns_to_exclude)[columns_to_include]
-  df_analysis = df_analysis.fillna('__NULL__')
+    df_analysis = df.drop(columns=columns_to_exclude)[columns_to_include]
+    df_analysis = df_analysis.fillna('__NULL__')
 
-  inclusion_deps = find_inclusion_dependencies(df_analysis, min_confidence=0.95)
+    inclusion_deps = find_inclusion_dependencies(df_analysis, min_confidence=0.95)
   
-  if inclusion_deps:
-      print("\nSome inclusion dependencies discovered:")
-      for dep in sorted(inclusion_deps, key=lambda x: x[2], reverse=True)[:10]:
-          print(f"{dep[0]} ⊆ {dep[1]} (confidence: {dep[2]:.4f})")
+    if inclusion_deps:
+        print("\nSome inclusion dependencies discovered:")
+        for dep in sorted(inclusion_deps, key=lambda x: x[2], reverse=True)[:10]:
+            print(f"{dep[0]} ⊆ {dep[1]} (confidence: {dep[2]:.4f})")
