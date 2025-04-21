@@ -14,6 +14,8 @@ from collections import Counter, defaultdict
 from string import capwords
 
 
+import matplotlib.colors as mcolors
+from wordcloud import WordCloud
 import networkx as nx
 import time
 from collections import defaultdict

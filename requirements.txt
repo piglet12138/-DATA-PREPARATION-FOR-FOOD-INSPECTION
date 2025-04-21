@@ -11,3 +11,4 @@ mlxtend
 tqdm
 tabulate
 sklearn
+WordCloud
