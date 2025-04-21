@@ -5,9 +5,107 @@ import pandas as pd
 import numpy as np
 from fuzzywuzzy import fuzz, process
 import sqlite3
+import missingno as msno
+from difflib import get_close_matches
 from datetime import datetime
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 ##### DATA PROFILING #####
+def profiling_zip(df):
+    '''
+    Function to profile ZIP codes in the dataset.
+    Args:
+        df: DataFrame containing ZIP codes
+        
+    Example usage:
+    profiling_zip(updated_food_dataset)
+    '''
+    
+    # show most frequent zip codes
+    plt.figure(figsize=(12, 4))
+    sns.countplot(data=df, x='zip', order=df['zip'].value_counts().iloc[:5].index) 
+    plt.title("Top 5 Most Frequent ZIP Codes")
+    plt.xticks(rotation=45)
+    plt.show()
+    
+    consistent_zip_length = df.copy()
+    consistent_zip_length['zip_length'] = consistent_zip_length['zip'].astype(str).str.len()
+    sns.countplot(data=consistent_zip_length, x='zip_length')
+    plt.title("ZIP Code Length Distribution")
+    
+def profiling_state(df):
+    '''
+    Function to profile states in the dataset.
+    Args:
+        df: DataFrame containing state data
+        
+    Example usage:
+    profiling_state(updated_food_dataset)
+    '''
+    
+        
+    state_profile = (
+        df['state']
+        .value_counts(dropna=False)
+        .rename("Count")
+        .to_frame()
+        .assign(Percentage=lambda x: (x['Count'] / len(df)).round(2))
+        .rename_axis('State')
+        .reset_index()
+    )
+    print(state_profile)
+    
+    # Create bar chart for state counts
+    plt.figure(figsize=(10, 6))
+    state_counts = df['state'].value_counts()
+    sns.barplot(x=state_counts.index, y=state_counts.values)
+    plt.title("Distribution of States in Dataset")
+    plt.xlabel("State")
+    plt.ylabel("Count")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+def check_zip_state_city_mapping(df):
+    """
+    Check ZIP code to state/city mapping consistency.
+    
+    Args:
+        df: DataFrame containing ZIP, state, and city columns
+    """
+    # Find ZIPs mapped to multiple states (invalid)
+    zip_state_violations = df.groupby('zip')['state'].nunique()
+    anomalous_zips = zip_state_violations[zip_state_violations > 1]
+    print(f"ZIPs with conflicting states: {len(anomalous_zips)}")
+
+    # Show examples
+    print(df[df['zip'].isin(anomalous_zips.index)]
+            .sort_values('zip')[['zip', 'state', 'city']].head(10))
+
+def check_city_state_spelling(df, sample_size=5):
+    '''
+    Function to check city and state spelling in the dataset.
+    Args:
+        df: DataFrame containing city and state data
+        
+    Example usage:
+    check_city_state_spelling(updated_food_dataset)
+    '''
+    
+    
+    sample_cities = df['city'].dropna().unique()
+    for city in sample_cities[:sample_size]:  # Check first sample_size for demo
+        matches = get_close_matches(city, sample_cities, n=sample_size, cutoff=0.8)
+        if len(matches) > 1:
+            print(f"Potential duplicates for '{city}': {matches}")
+    
+    sample_states = df['state'].dropna().unique()
+    for state in sample_states[:sample_size]:  # Check first sample_size for demo
+        matches = get_close_matches(city, sample_states, n=sample_size, cutoff=0.8)
+        if len(matches) > 1:
+            print(f"Potential duplicates for '{state}': {matches}")
+            
 
 def analyze_violations_structure(df, sample_size=100):
     """
@@ -761,10 +859,7 @@ if __name__ == '__main__':
     updated_food_dataset = food_dataset.copy()
     # Apply function
     updated_food_dataset = col_name_changer(updated_food_dataset)
-    ##### DATA PROFILING #####
-    analyze_violations_structure(updated_food_dataset, sample_size=1000)
-    verify_violations_structure(updated_food_dataset)
-    
+
     ##### DATA PROCESSING #####
     updated_food_dataset = process_license_numbers(updated_food_dataset)
     updated_food_dataset = clean_zip_data(updated_food_dataset).drop(columns=['zip','zip_valid'],axis=1).rename(columns={'zip_clean':'zip'})
@@ -781,7 +876,16 @@ if __name__ == '__main__':
     updated_food_dataset = fix_city_name(updated_food_dataset)
     updated_food_dataset.to_csv("cleaned_dataset_for_FD.csv", index=False)
 
-
+    ##### DATA PROFILING #####
+    analyze_violations_structure(updated_food_dataset, sample_size=1000)
+    verify_violations_structure(updated_food_dataset)
+    profiling_zip(updated_food_dataset)
+    profiling_state(updated_food_dataset)
+    check_zip_state_city_mapping(updated_food_dataset)
+    check_city_state_spelling(updated_food_dataset)
+    
+    
+    ##### INGESTING TO SQL DATABASE #####
     violations_df = parse_violations(updated_food_dataset) # parse the violations, output a separate dataframe. read the docstring for more details
     facility_df, inspection_df = create_normalized_tables(updated_food_dataset) # Create the normalized tables
     
