@@ -6,7 +6,7 @@ import numpy as np
 from fuzzywuzzy import fuzz, process
 import sqlite3
 import missingno as msno
-from difflib import get_close_matches
+from difflib import get_close_matches, SequenceMatcher
 from datetime import datetime
 import matplotlib.pyplot as plt
 import seaborn as sns
