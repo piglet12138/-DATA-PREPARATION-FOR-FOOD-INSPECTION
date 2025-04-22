@@ -12,6 +12,7 @@ This repo contains a complete data pipeline for processing, cleaning, analyzing,
     - Missing coordinates (geocoding)
     - Risk categories
     - Business names
+    - Fill missing values with FDs
 - Saves cleaned dataset to CSV for future use
 
 ## Data Profiling and Quality Checks
@@ -24,6 +25,8 @@ The pipeline performs various data quality checks:
 - Verify location data (ZIP codes, states)
 - Check for proper mapping between ZIP/state/city
 - Inspect violation data structure and content
+- Association mining
+- FD mining with TANE
 
 ## Database Normalization and Storage
 The data is normalized into three main tables:
